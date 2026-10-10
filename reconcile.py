@@ -1,4 +1,5 @@
-"""Reconcile the ALO tree with a flat layer order coming from QGIS.
+"""Sync algorithms between the ALO tree and QGIS's flat lists: reconciling
+with a new layer order (below), and placing new layers (plan_new_layers).
 
 When the user reorders layers in the stock Layer Order panel, QGIS only
 gives us a new flat list. The group structure has to be inferred. This
@@ -33,10 +34,10 @@ import copy
 from bisect import bisect_left
 from collections.abc import Iterable
 
-from .model import GroupNode
+from .model import GroupNode, Node
 
 
-def _flatten(nodes) -> list:
+def _flatten(nodes: list[Node]) -> list[str]:
     out = []
     for n in nodes:
         if isinstance(n, GroupNode):
@@ -107,7 +108,8 @@ def _moved_candidates(old: list, new: list, hint: Iterable[str]) -> list:
     return _single_moves(old, new) or [set(old) - _lcs_ids(old, new)]
 
 
-def _parents(nodes, parent=None, out=None) -> dict:
+def _parents(nodes: list[Node], parent: str | None = None,
+             out: dict[str, str | None] | None = None) -> dict[str, str | None]:
     """{layer id: parent group id or None}."""
     out = {} if out is None else out
     for n in nodes:
@@ -118,7 +120,8 @@ def _parents(nodes, parent=None, out=None) -> dict:
     return out
 
 
-def _edges(nodes, parent=None, out=None) -> dict:
+def _edges(nodes: list[Node], parent: GroupNode | None = None,
+           out: dict[str, bool] | None = None) -> dict[str, bool]:
     """{layer id: True if top level, or first or last in its group}."""
     out = {} if out is None else out
     last = len(nodes) - 1
@@ -139,6 +142,35 @@ def _score(old_root: list, new_root: list, moved: set) -> tuple:
     return changed, sum(edges[lid] for lid in moved)
 
 
+def plan_new_layers(panel_order: list[str], known: set[str],
+                    new: list[str]) -> list[tuple[str, str | None, bool]]:
+    """Where new layers go: ``(layer id, anchor id, after)`` in insertion order.
+
+    Each new layer goes just before the nearest known layer below it in the
+    Layers panel (`panel_order`, top first); below every known layer, just
+    after the lowest one. Layers missing from the panel count as being at
+    its bottom. With no known layer at all, anchors are None: append in
+    panel order. O(n).
+    """
+    targets = set(new)
+    order = [lid for lid in panel_order if lid in known or lid in targets]
+    in_panel = set(order)
+    order += [lid for lid in new if lid not in in_panel]
+    plan: list[tuple[str, str | None, bool]] = []
+    below: str | None = None
+    trailing: list[str] = []
+    for lid in reversed(order):          # bottom-up: the nearest known layer below
+        if lid in known:
+            below = lid
+        elif below is not None:
+            plan.append((lid, below, False))
+        else:
+            trailing.append(lid)
+    plan.reverse()
+    lowest = next((lid for lid in reversed(order) if lid in known), None)
+    return plan + [(lid, lowest, True) for lid in reversed(trailing)]
+
+
 def reconcile_tree(root: list, new_order: list, moved_hint: Iterable[str] = ()) -> list | None:
     """Return a new tree whose flattened order is `new_order`.
 
@@ -156,112 +188,144 @@ def reconcile_tree(root: list, new_order: list, moved_hint: Iterable[str] = ()) 
     return min(results, key=lambda r: _score(root, r[0], r[1]))[0]
 
 
-def _place_moved(root: list, new_order: list, moved: set) -> list:
+class _Index:
+    """Parent links of a tree being edited: O(1) parent, O(depth) ancestry."""
+
+    def __init__(self, root: list[Node]) -> None:
+        self.parent: dict[str, GroupNode | None] = {}
+        self.node: dict[str, Node] = {}
+        stack: list[tuple[list[Node], GroupNode | None]] = [(root, None)]
+        while stack:
+            children, p = stack.pop()
+            for ch in children:
+                self.parent[ch.id] = p
+                self.node[ch.id] = ch
+                if isinstance(ch, GroupNode):
+                    stack.append((ch.children, ch))
+
+    def chain(self, node_id: str | None) -> list[GroupNode]:
+        """Ancestor groups of node_id, outermost first ([] for top level or None)."""
+        out = []
+        p = self.parent[node_id] if node_id else None
+        while p is not None:
+            out.append(p)
+            p = self.parent[p.id]
+        return out[::-1]
+
+    def child_containing(self, group: GroupNode | None, node_id: str | None) -> str | None:
+        """Id of the child of `group` (None = top level) that is, or contains,
+        node_id; None if node_id is not inside `group`."""
+        if node_id is None:
+            return None
+        cur = node_id
+        while self.parent[cur] is not group:
+            if self.parent[cur] is None:
+                return None
+            cur = self.parent[cur].id
+        return cur
+
+
+def _detach(nodes: list[Node], ids: set[str]) -> list[Node]:
+    """`nodes` without the layers in `ids` (groups are kept, even emptied)."""
+    out = []
+    for n in nodes:
+        if n.id in ids:
+            continue
+        if isinstance(n, GroupNode):
+            n.children = _detach(n.children, ids)
+        out.append(n)
+    return out
+
+
+def _next_anchors(new_order: list[str], moved: set[str]) -> list[str | None]:
+    """For each position, the next layer after it that did not move."""
+    out: list[str | None] = [None] * len(new_order)
+    anchor = None
+    for pos in range(len(new_order) - 1, -1, -1):
+        out[pos] = anchor
+        if new_order[pos] not in moved:
+            anchor = new_order[pos]
+    return out
+
+
+def _target_group(prev_chain: list[GroupNode], next_chain: list[GroupNode],
+                  orig_parent_id: str | None) -> GroupNode | None:
+    """Group a moved layer goes into, between neighbours with these ancestries.
+
+    Valid places: the deepest group containing both neighbours, plus the
+    groups that end at the previous neighbour or start at the next one.
+    The layer's original group wins if it is one of them; otherwise the
+    deepest common group (see the module docstring).
+    """
+    depth = 0
+    while (depth < min(len(prev_chain), len(next_chain))
+           and prev_chain[depth] is next_chain[depth]):
+        depth += 1
+    common = prev_chain[depth - 1] if depth else None
+    for c in (common, *prev_chain[depth:], *next_chain[depth:]):
+        if (c.id if c is not None else None) == orig_parent_id:
+            return c
+    return common
+
+
+class _Insertions:
+    """Where each moved layer goes, relative to the tree without them:
+    just before / just after a node, or at the end of a group. Applied by
+    one splice at the end, so placing k layers costs O(n + k), not O(n·k)."""
+
+    def __init__(self) -> None:
+        self.before: dict[str, list[Node]] = {}
+        self.after: dict[str, list[Node]] = {}
+        self.end: dict[str | None, list[Node]] = {}
+
+    def add(self, index: _Index, target: GroupNode | None, prev_id: str | None,
+            next_id: str | None, layer: Node) -> None:
+        """Right after the previous neighbour's branch in `target`, else right
+        before the next one's, else at the end of `target`."""
+        x = index.child_containing(target, prev_id)
+        y = index.child_containing(target, next_id) if x is None else None
+        if x is not None:
+            self.after.setdefault(x, []).append(layer)
+        elif y is not None:
+            self.before.setdefault(y, []).append(layer)
+        else:
+            self.end.setdefault(getattr(target, "id", None), []).append(layer)
+
+    def splice(self, children: list[Node], group_id: str | None = None) -> list[Node]:
+        out: list[Node] = []
+        stack = [(True, ch) for ch in reversed([*children, *self.end.get(group_id, ())])]
+        while stack:   # iterative: chains of "after" can be as long as k
+            expand, n = stack.pop()
+            if not expand:
+                if isinstance(n, GroupNode):
+                    n.children = self.splice(n.children, n.id)
+                out.append(n)
+                continue
+            stack.extend((True, m) for m in reversed(self.after.get(n.id, ())))
+            stack.append((False, n))
+            stack.extend((True, m) for m in reversed(self.before.get(n.id, ())))
+        return out
+
+
+def _place_moved(root: list[Node], new_order: list[str], moved: set[str]) -> list[Node]:
     """Detach `moved` layers and re-insert them at their new flat positions.
 
-    O(n + k·depth): one walk indexes the tree, each moved layer is placed
-    through parent links (as "before/after this node" or "at the end of
-    this group"), and one final pass splices them all in.
+    O(n + k·depth): the tree is indexed once, each moved layer is placed
+    through parent links, and one final splice inserts them all.
     """
     root = copy.deepcopy(root)
     moved = set(moved)
-    parent: dict = {}          # node id → parent GroupNode (None = top level)
-    nodes: dict = {}           # moved layer id → its node
-
-    def index(children, p):
-        for ch in children:
-            parent[ch.id] = p
-            if ch.id in moved:
-                nodes[ch.id] = ch
-            if isinstance(ch, GroupNode):
-                index(ch.children, ch)
-    index(root, None)
-    orig_parent = {lid: getattr(parent[lid], "id", None) for lid in moved}
-
-    def detach(children):
-        out = []
-        for ch in children:
-            if ch.id in moved:
-                continue
-            if isinstance(ch, GroupNode):
-                ch.children = detach(ch.children)
-            out.append(ch)
-        return out
-    root = detach(root)
-
-    def chain(node_id) -> list:
-        """Ancestor groups of node_id, outermost first ([] for top level)."""
-        out = []
-        p = parent[node_id]
-        while p is not None:
-            out.append(p)
-            p = parent[p.id]
-        return out[::-1]
-
-    def child_containing(group, node_id):
-        """Id of the child of `group` that is, or contains, node_id."""
-        cur = node_id
-        while parent[cur] is not group:
-            if parent[cur] is None:
-                return None
-            cur = parent[cur].id
-        return cur
-
-    # Next anchor (non-moved layer) after each position
-    next_anchor = [None] * len(new_order)
-    anchor = None
-    for pos in range(len(new_order) - 1, -1, -1):
-        next_anchor[pos] = anchor
-        if new_order[pos] not in moved:
-            anchor = new_order[pos]
-
-    before: dict = {}          # node id → moved layers just before it
-    after: dict = {}           # node id → moved layers just after it
-    end: dict = {}             # group id (None = top level) → appended layers
+    index = _Index(root)
+    orig_parent = {lid: getattr(index.parent[lid], "id", None) for lid in moved}
+    root = _detach(root, moved)
+    next_anchor = _next_anchors(new_order, moved)
+    insertions = _Insertions()
     for pos, lid in enumerate(new_order):
         if lid not in moved:
             continue
         prev_id = new_order[pos - 1] if pos > 0 else None
         next_id = next_anchor[pos]
-
-        prev_chain = chain(prev_id) if prev_id else []
-        next_chain = chain(next_id) if next_id else []
-        common_depth = 0
-        while (common_depth < min(len(prev_chain), len(next_chain))
-               and prev_chain[common_depth] is next_chain[common_depth]):
-            common_depth += 1
-        common = prev_chain[common_depth - 1] if common_depth else None
-        candidates = [common, *prev_chain[common_depth:], *next_chain[common_depth:]]
-
-        target = common
-        for c in candidates:
-            if (c.id if c is not None else None) == orig_parent[lid]:
-                target = c
-                break
-
-        x = child_containing(target, prev_id) if prev_id else None
-        y = child_containing(target, next_id) if next_id and x is None else None
-        if x is not None:
-            after.setdefault(x, []).append(nodes[lid])
-        elif y is not None:
-            before.setdefault(y, []).append(nodes[lid])
-        else:
-            end.setdefault(getattr(target, "id", None), []).append(nodes[lid])
-        parent[lid] = target   # now placed: an anchor for the moved layers after it
-
-    def rebuild(children, group_id):
-        out = []
-        stack = [(True, ch) for ch in reversed([*children, *end.get(group_id, ())])]
-        while stack:   # iterative: chains of "after" can be as long as k
-            full, n = stack.pop()
-            if not full:
-                if isinstance(n, GroupNode):
-                    n.children = rebuild(n.children, n.id)
-                out.append(n)
-                continue
-            stack.extend((True, m) for m in reversed(after.get(n.id, ())))
-            stack.append((False, n))
-            stack.extend((True, m) for m in reversed(before.get(n.id, ())))
-        return out
-
-    return rebuild(root, None)
+        target = _target_group(index.chain(prev_id), index.chain(next_id), orig_parent[lid])
+        insertions.add(index, target, prev_id, next_id, index.node[lid])
+        index.parent[lid] = target   # now placed: an anchor for the moved layers after it
+    return insertions.splice(root)

@@ -19,9 +19,8 @@ and turns drops / checkbox clicks into intents; ``LayerOrderTree``
 """
 from __future__ import annotations
 
-import os
-
-from qgis.PyQt.QtCore import QItemSelectionModel, QSize, Qt, pyqtSignal
+from qgis.PyQt.QtCore import QItemSelectionModel, QModelIndex, QPoint, QSize, Qt, pyqtSignal
+from qgis.PyQt.QtGui import QIcon
 from qgis.PyQt.QtWidgets import (
     QCheckBox,
     QDockWidget,
@@ -33,6 +32,7 @@ from qgis.PyQt.QtWidgets import (
     QWidget,
 )
 
+from .debug import debug_mode
 from .i18n import (
     ADD_GROUP,
     CONTROL_RENDERING_ORDER,
@@ -68,7 +68,7 @@ class _ReportingCheckBox(QCheckBox):
 
     toggle_requested = pyqtSignal(bool)
 
-    def nextCheckState(self):
+    def nextCheckState(self) -> None:
         self.toggle_requested.emit(not self.isChecked())
 
 
@@ -90,7 +90,7 @@ class LayerOrderView(QDockWidget):
     verbose_toggled = pyqtSignal(bool)
     undo_requested = pyqtSignal(bool)                    # True = undo, False = redo (toolbar buttons)
 
-    def __init__(self, parent=None):
+    def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__("Advanced Layer Order", parent)
         # Lets QGIS save and restore the dock's place and visibility
         self.setObjectName("AdvancedLayerOrderDock")
@@ -101,14 +101,14 @@ class LayerOrderView(QDockWidget):
     # ==================================================================
     # Construction
     # ==================================================================
-    def _build_ui(self):
+    def _build_ui(self) -> None:
         rootw = QWidget()
         self.setWidget(rootw)
         lay = QVBoxLayout(rootw)
         head = QHBoxLayout()
         lay.addLayout(head)
 
-        def tool_button(icon, tip):
+        def tool_button(icon: QIcon, tip: str) -> QPushButton:
             b = QPushButton()
             b.setIcon(icon)
             b.setToolTip(tip)
@@ -147,11 +147,11 @@ class LayerOrderView(QDockWidget):
         # Debug aid only: shown when QGIS runs with QGIS_DEBUG set
         # (Settings → Options → System → Environment)
         self.chk_verbose = _ReportingCheckBox("Verbose logging (AdvancedLayerOrder log tab)")
-        self.chk_verbose.setVisible(bool(os.environ.get("QGIS_DEBUG")))
+        self.chk_verbose.setVisible(debug_mode())
         for c in (self.chk_control, self.chk_verbose):
             lay.addWidget(c)
 
-    def _connect_signals(self):
+    def _connect_signals(self) -> None:
         # Bound methods and signals only: PyQt keeps a lambda or closure
         # that captures self alive from C++, where the GC can't see it, so
         # the panel was never freed on unload (tests/qgis/check_no_leaks.py).
@@ -171,22 +171,22 @@ class LayerOrderView(QDockWidget):
         self.item_model.drop_intent.connect(self.drop_requested)
         self.item_model.check_intent.connect(self.check_requested)
 
-    def _request_create_group(self):
+    def _request_create_group(self) -> None:
         self.create_group_requested.emit(self.selected_ids())
 
-    def _request_delete_groups(self):
+    def _request_delete_groups(self) -> None:
         self.delete_groups_requested.emit(self.selected_group_ids())
 
-    def _request_move_up(self):
+    def _request_move_up(self) -> None:
         self._request_move_by_one(True)
 
-    def _request_move_down(self):
+    def _request_move_down(self) -> None:
         self._request_move_by_one(False)
 
-    def _request_undo(self):
+    def _request_undo(self) -> None:
         self.undo_requested.emit(True)
 
-    def _request_redo(self):
+    def _request_redo(self) -> None:
         self.undo_requested.emit(False)
 
     # ==================================================================
@@ -196,7 +196,7 @@ class LayerOrderView(QDockWidget):
         """Selected items without a selected ancestor, in display order."""
         selected = {ix.data(ROLE_ID): ix for ix in self.tree.selectionModel().selectedIndexes()}
 
-        def has_selected_ancestor(ix):
+        def has_selected_ancestor(ix: QModelIndex) -> bool:
             p = ix.parent()
             while p.isValid():
                 if p.data(ROLE_ID) in selected:
@@ -211,17 +211,17 @@ class LayerOrderView(QDockWidget):
         return [ix.data(ROLE_ID) for ix in self.tree.selectionModel().selectedIndexes()
                 if ix.data(ROLE_TYPE) == TYPE_GROUP]
 
-    def _request_move_by_one(self, up: bool):
+    def _request_move_by_one(self, up: bool) -> None:
         ids = self.selected_ids()
         if ids:
             self.move_by_one_requested.emit(ids, up)
 
-    def _request_rename(self):
+    def _request_rename(self) -> None:
         groups = self.selected_group_ids()
         if len(groups) == 1:
             self.rename_group_requested.emit(groups[0])
 
-    def _update_group_buttons(self, *_args):
+    def _update_group_buttons(self, *_args: object) -> None:
         n = len(self.selected_group_ids())
         enabled = self.chk_control.isChecked()
         any_selected = self.tree.selectionModel().hasSelection()
@@ -233,7 +233,7 @@ class LayerOrderView(QDockWidget):
         self.btn_undo.setEnabled(enabled and can_undo)
         self.btn_redo.setEnabled(enabled and can_redo)
 
-    def _on_context_menu(self, pos):
+    def _on_context_menu(self, pos: QPoint) -> None:
         if not self.chk_control.isChecked():
             return
         under = self.tree.indexAt(pos)
@@ -285,7 +285,7 @@ class LayerOrderView(QDockWidget):
     # ==================================================================
     # Rendering (ViewController → View)
     # ==================================================================
-    def render(self, nodes: list[dict]):
+    def render(self, nodes: list[dict]) -> None:
         """Show a tree of node dicts.
 
         Group: {"type": "group", "id", "name", "expanded", "children"}
@@ -294,7 +294,7 @@ class LayerOrderView(QDockWidget):
         scroll = self.tree.verticalScrollBar().value()
         self.item_model.render(nodes)
 
-        def expand(ns):
+        def expand(ns: list[dict]) -> None:
             for n in ns:
                 if n["type"] == TYPE_GROUP:
                     self.tree.setExpanded(self.item_model.index_of(n["id"]), bool(n.get("expanded", True)))
@@ -303,16 +303,16 @@ class LayerOrderView(QDockWidget):
         self.tree.verticalScrollBar().setValue(scroll)
         self._update_group_buttons()
 
-    def render_name(self, item_id: str, name: str):
+    def render_name(self, item_id: str, name: str) -> None:
         self.item_model.set_name(item_id, name)
 
-    def render_visibility(self, layer_id: str, visible: bool):
+    def render_visibility(self, layer_id: str, visible: bool) -> None:
         self.item_model.set_visible(layer_id, visible)
 
-    def render_expanded(self, group_id: str, expanded: bool):
+    def render_expanded(self, group_id: str, expanded: bool) -> None:
         self.tree.setExpanded(self.item_model.index_of(group_id), expanded)
 
-    def render_selection(self, item_ids: list[str]):
+    def render_selection(self, item_ids: list[str]) -> None:
         """Select `item_ids`; the first becomes current and is scrolled to."""
         selection = self.tree.selectionModel()
         selection.clearSelection()
@@ -323,13 +323,13 @@ class LayerOrderView(QDockWidget):
             selection.setCurrentIndex(indexes[0], QItemSelectionModel.SelectionFlag.NoUpdate)
             self.tree.scrollTo(indexes[0])
 
-    def render_control_enabled(self, enabled: bool):
+    def render_control_enabled(self, enabled: bool) -> None:
         self.chk_control.setChecked(bool(enabled))
         for w in (self.tree, self.btn_add_group):
             w.setEnabled(enabled)
         self._update_group_buttons()
 
-    def render_undo_state(self, can_undo: bool, undo_text: str, can_redo: bool, redo_text: str):
+    def render_undo_state(self, can_undo: bool, undo_text: str, can_redo: bool, redo_text: str) -> None:
         """Undo / Redo buttons: availability and the step they would act on."""
         self._undo_state = (can_undo, undo_text, can_redo, redo_text)
         undo, redo = tr(UNDO), tr(REDO)
@@ -337,5 +337,5 @@ class LayerOrderView(QDockWidget):
         self.btn_redo.setToolTip(f"{redo}: {redo_text}" if can_redo and redo_text else redo)
         self._update_group_buttons()
 
-    def render_verbose(self, checked: bool):
+    def render_verbose(self, checked: bool) -> None:
         self.chk_verbose.setChecked(bool(checked))

@@ -5,11 +5,18 @@ action. Undo/redo restore it through Model.restore_structure(), which keeps
 the current layer set and QGIS-mirrored state, so undo can never resurrect a
 deleted layer or drop one QGIS still has.
 """
+from __future__ import annotations
+
+from typing import TYPE_CHECKING
+
 from .compat import QUndoCommand
+
+if TYPE_CHECKING:
+    from .model import LayerOrderModel
 
 
 class TreeStateCommand(QUndoCommand):
-    def __init__(self, model, before_json: str, after_json: str, text: str):
+    def __init__(self, model: LayerOrderModel, before_json: str, after_json: str, text: str) -> None:
         super().__init__(text)
         self._model = model
         self._before = before_json
@@ -18,10 +25,10 @@ class TreeStateCommand(QUndoCommand):
         # already been applied when the command is pushed.
         self._applied = True
 
-    def undo(self):
+    def undo(self) -> None:
         self._model.restore_structure(self._before)
 
-    def redo(self):
+    def redo(self) -> None:
         if self._applied:
             self._applied = False
             return

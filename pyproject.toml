@@ -4,7 +4,7 @@ target-version = "py39"            # QGIS 3.40+ may ship Python 3.9; QGIS 4 ship
 extend-exclude = ["dist", "tests/vendor"]
 
 [tool.ruff.lint]
-select = ["E", "F", "W", "B", "I", "UP", "SIM", "RUF"]
+select = ["E", "F", "W", "B", "I", "UP", "SIM", "RUF", "ANN"]   # ANN: every runtime function annotated
 ignore = [
     "RUF001", "RUF002", "RUF003",  # typographic characters in strings/docs are intended
     "SIM105",                      # explicit try/except/pass reads better for Qt disconnects
@@ -12,6 +12,8 @@ ignore = [
 
 [tool.ruff.lint.per-file-ignores]
 "tree_model.py" = ["B008"]   # Qt's `parent: QModelIndex = QModelIndex()` override signatures
+"tests/**" = ["ANN"]
+"scripts/**" = ["ANN"]
 
 [tool.ruff.lint.isort]
 known-first-party = ["advanced_layer_order"]

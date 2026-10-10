@@ -4,9 +4,11 @@ Toolbar and group icons are SVGs shipped in ``icons/``; layer icons come
 from QGIS (``QgsIconUtils.iconForLayer``), with a bundled generic icon for
 layers QGIS no longer knows.
 """
+from __future__ import annotations
+
 import os
 
-from qgis.core import QgsIconUtils, QgsProject
+from qgis.core import QgsIconUtils, QgsMapLayer, QgsProject
 from qgis.PyQt.QtGui import QIcon
 
 _ICONS_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "icons")
@@ -50,7 +52,7 @@ def icon_redo() -> QIcon:
     return bundled_icon("redo.svg")
 
 
-def icon_for_layer(layer) -> QIcon:
+def icon_for_layer(layer: QgsMapLayer | None) -> QIcon:
     """QGIS's own icon for the layer type/geometry; generic icon if None."""
     if layer is not None:
         icon = QgsIconUtils.iconForLayer(layer)

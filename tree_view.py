@@ -12,8 +12,11 @@ The ViewController records the wish in the Model, which renders it back.
 Ctrl+↑ / Ctrl+↓ (Cmd on macOS) are reported as ``move_intent(up)``; the
 dock adds the current selection.
 """
+from __future__ import annotations
+
 from qgis.PyQt.QtCore import QModelIndex, Qt, pyqtSignal
-from qgis.PyQt.QtWidgets import QAbstractItemView, QTreeView
+from qgis.PyQt.QtGui import QKeyEvent, QMouseEvent
+from qgis.PyQt.QtWidgets import QAbstractItemView, QTreeView, QWidget
 
 from .compat import event_pos
 from .model import TYPE_GROUP
@@ -24,7 +27,7 @@ class LayerOrderTree(QTreeView):
     expand_intent = pyqtSignal(str, bool)   # group id, expanded
     move_intent = pyqtSignal(bool)          # up
 
-    def __init__(self, parent=None):
+    def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
         self.setHeaderHidden(True)
         self.setUniformRowHeights(True)
@@ -46,7 +49,7 @@ class LayerOrderTree(QTreeView):
         self.expand_intent.emit(index.data(ROLE_ID), not self.isExpanded(index))
         return True
 
-    def mousePressEvent(self, e):
+    def mousePressEvent(self, e: QMouseEvent) -> None:
         index = self.indexAt(event_pos(e))
         if index.isValid() and self.model().hasChildren(index):
             left = self.visualRect(index).left()
@@ -55,7 +58,7 @@ class LayerOrderTree(QTreeView):
                 return
         super().mousePressEvent(e)
 
-    def keyPressEvent(self, e):
+    def keyPressEvent(self, e: QKeyEvent) -> None:
         # Arrow keys carry KeypadModifier on macOS: ignore it
         mods = e.modifiers() & ~Qt.KeyboardModifier.KeypadModifier
         if mods == Qt.KeyboardModifier.ControlModifier and e.key() in (Qt.Key.Key_Up, Qt.Key.Key_Down):

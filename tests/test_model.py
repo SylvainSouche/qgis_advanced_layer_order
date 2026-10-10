@@ -21,6 +21,7 @@ from advanced_layer_order.model import (
     EVENT_ORDER_CHANGED,
     EVENT_VISIBILITY_CHANGED,
     TREE_JSON_SCHEMA_VERSION,
+    DocumentError,
     GroupNode,
     LayerNode,
     LayerOrderModel,
@@ -711,12 +712,36 @@ def test_add_layer_beside(model):
     assert model.find_item("n2").visible is False
 
 
-def test_load_from_json_tolerates_garbage(model):
+def test_load_from_json_skips_malformed_nodes_with_a_warning(model, caplog):
     model.load_from_json('{"children": [42, {"type": "layer"}, '
-                         '{"type": "group", "children": [{"type": "layer", "id": "x"}]}]}')
+                         '{"type": "group", "children": [{"type": "layer", "id": "x"}, 7]}]}')
     assert model.get_flattened_layer_ids() == ["x"]
-    model.load_from_json("not json")
-    assert model.get_root() == []
+    assert "skipped 3 malformed node(s)" in caplog.text
+
+
+@pytest.mark.parametrize("raw", ["not json", "[1, 2]", '{"children": 5}', "42"])
+def test_load_from_json_unreadable_raises_and_keeps_the_tree(model, raw):
+    model.add_layer("a", "A")
+    with pytest.raises(DocumentError):
+        model.load_from_json(raw)
+    assert model.get_flattened_layer_ids() == ["a"]
+
+
+def test_failing_listener_is_logged_and_others_still_run(model, caplog, monkeypatch):
+    monkeypatch.delenv("QGIS_DEBUG", raising=False)
+    seen = []
+    model.add_listener(lambda et, p: 1 / 0)
+    model.add_listener(lambda et, p: seen.append(et))
+    model.add_layer("a", "A")
+    assert seen == ["layer_added", "order_changed"]
+    assert "listener failed" in caplog.text
+
+
+def test_failing_listener_raises_in_debug_mode(model, monkeypatch):
+    monkeypatch.setenv("QGIS_DEBUG", "1")
+    model.add_listener(lambda et, p: 1 / 0)
+    with pytest.raises(ZeroDivisionError):
+        model.add_layer("a", "A")
 
 
 # ---------- move_items_by_one ----------
