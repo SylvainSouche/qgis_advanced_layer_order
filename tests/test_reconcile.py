@@ -2,7 +2,7 @@
 
 
 from advanced_layer_order.model import GroupNode, LayerNode
-from advanced_layer_order.reconcile import reconcile_tree
+from advanced_layer_order.reconcile import plan_new_layers, reconcile_tree
 
 
 def _build(spec):
@@ -160,3 +160,25 @@ def test_dragging_one_layer_never_regroups_another():
 
     explore(_build(ABCD), 4)
     assert checked == 340
+
+
+# ---------- plan_new_layers ----------
+
+def test_plan_new_layers_goes_before_the_known_layer_below():
+    # panel (top first): N1 A N2 N3 B ; A and B known
+    plan = plan_new_layers(["N1", "A", "N2", "N3", "B"], {"A", "B"}, ["N3", "N1", "N2"])
+    assert plan == [("N1", "A", False), ("N2", "B", False), ("N3", "B", False)]
+
+
+def test_plan_new_layers_below_everything_goes_after_the_lowest_known():
+    plan = plan_new_layers(["A", "B", "N1", "N2"], {"A", "B"}, ["N1", "N2"])
+    assert plan == [("N1", "B", True), ("N2", "B", True)]
+
+
+def test_plan_new_layers_missing_from_the_panel_count_as_bottom():
+    plan = plan_new_layers(["A"], {"A"}, ["X"])
+    assert plan == [("X", "A", True)]
+
+
+def test_plan_new_layers_nothing_known_appends_in_panel_order():
+    assert plan_new_layers(["N2", "N1"], set(), ["N1", "N2"]) == [("N2", None, True), ("N1", None, True)]

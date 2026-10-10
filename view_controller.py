@@ -19,7 +19,7 @@ carry their data.
 from __future__ import annotations
 
 import logging
-from collections.abc import Callable
+from collections.abc import Callable, Iterable, Iterator
 from contextlib import contextmanager
 
 from qgis.PyQt.QtCore import QObject, QTimer, pyqtSignal
@@ -52,6 +52,7 @@ from .model import (
     GroupNode,
     LayerNode,
     LayerOrderModel,
+    Node,
 )
 from .tree_model import DROP_ABOVE, DROP_BELOW, DROP_END, DROP_ON
 from .undo import TreeStateCommand
@@ -68,7 +69,8 @@ class ViewController(QObject):
     control_requested = pyqtSignal(bool)            # take over the rendering order
 
     def __init__(self, model: LayerOrderModel, view: LayerOrderView,
-                 layer_icon: Callable[[str], QIcon] | None = None, parent=None):
+                 layer_icon: Callable[[str], QIcon] | None = None,
+                 parent: QObject | None = None) -> None:
         super().__init__(parent)
         self._model = model
         self._view = view
@@ -126,7 +128,7 @@ class ViewController(QObject):
         elif event_type == EVENT_CONTROL_CHANGED:
             v.render_control_enabled(payload["enabled"])
 
-    def _render_undo_state(self, *_args) -> None:
+    def _render_undo_state(self, *_args: object) -> None:
         s = self.undo_stack
         self._view.render_undo_state(s.canUndo(), s.undoText(), s.canRedo(), s.redoText())
 
@@ -136,7 +138,7 @@ class ViewController(QObject):
         self._view.render_control_enabled(self._model.get_control_enabled())
 
     def _render_tree(self) -> None:
-        def as_dict(node):
+        def as_dict(node: Node) -> dict:
             if isinstance(node, GroupNode):
                 return {"type": TYPE_GROUP, "id": node.id, "name": node.name,
                         "expanded": node.expanded,
@@ -149,7 +151,7 @@ class ViewController(QObject):
     # Undoable transactions
     # ==================================================================
     @contextmanager
-    def _user_edit(self, text: str):
+    def _user_edit(self, text: str) -> Iterator[None]:
         """Run one user action as a single Model transaction + undo step.
 
         Inside, Model events are batched (one resync on exit renders the
@@ -295,7 +297,7 @@ class ViewController(QObject):
     # ==================================================================
     # Helpers
     # ==================================================================
-    def _in_tree_order(self, item_ids) -> list:
+    def _in_tree_order(self, item_ids: Iterable[str]) -> list[str]:
         """Known ids from `item_ids`, de-duplicated, in display order."""
         order = self._model.tree_order_key()
         return sorted((i for i in dict.fromkeys(item_ids) if i in order), key=order.get)

@@ -21,11 +21,16 @@ Requests (wired by plugin.py from the ViewController)
 Every QGIS signal we cause ourselves fires synchronously while
 ``_applying`` is set; that one flag is how our own echoes are recognised.
 """
+from __future__ import annotations
+
 import logging
+from collections.abc import Callable
+from typing import TYPE_CHECKING
 
 from qgis.core import QgsLayerTree, QgsProject
 from qgis.PyQt.QtCore import QObject, QTimer, pyqtSignal
 
+from .debug import debug_mode
 from .i18n import LAYER_ORDER, tr
 from .model import (
     EVENT_EXPANDED_CHANGED,
@@ -33,17 +38,25 @@ from .model import (
     EVENT_LAYER_RENAMED,
     EVENT_MODEL_LOADED,
     EVENT_ORDER_CHANGED,
+    DocumentError,
     LayerOrderModel,
 )
-from .reconcile import reconcile_tree
+from .reconcile import plan_new_layers, reconcile_tree
+
+if TYPE_CHECKING:
+    from qgis.core import QgsLayerTreeNode, QgsMapLayer
+    from qgis.gui import QgisInterface
+    from qgis.PyQt.QtCore import pyqtBoundSignal
 
 log = logging.getLogger("AdvancedLayerOrder.controller")
 
 ENTRY_SCOPE = "AdvancedLayerOrder"
 LEGACY_SCOPE = "BetterLayerOrder"     # Layer Order Plus and early fork builds: read, never written
 ENTRY_TREE = "tree_json"
+ENTRY_TREE_UNREADABLE = "tree_json_unreadable"   # an unreadable tree_json, kept aside
 
-APPLY_DEBOUNCE_MS = 50
+APPLY_DEBOUNCE_MS = 50   # coalesces a burst of Model changes into one setCustomLayerOrder
+PLACE_DELAY_MS = 0       # next event-loop turn: QGIS has put the new layers in its tree by then
 
 _DOCUMENT_EVENTS = frozenset({
     EVENT_MODEL_LOADED, EVENT_ORDER_CHANGED, EVENT_GROUP_RENAMED,
@@ -60,7 +73,8 @@ class LayerOrderController(QObject):
     # ViewController so it becomes a step of the layer-order history.
     external_edit = pyqtSignal(str, str, str)
 
-    def __init__(self, model: LayerOrderModel, iface, parent=None):
+    def __init__(self, model: LayerOrderModel, iface: QgisInterface,
+                 parent: QObject | None = None) -> None:
         super().__init__(parent)
         self._model = model
         self._iface = iface
@@ -73,7 +87,7 @@ class LayerOrderController(QObject):
         self._dragged: set = set()
         # New layers have no layer-tree node yet when layersAdded fires, so
         # placing them (next to their Layers-panel neighbours) waits a turn.
-        self._place_timer = self._timer(0, self._place_pending_layers)
+        self._place_timer = self._timer(PLACE_DELAY_MS, self._place_pending_layers)
         self._pending_layers: list = []
 
         model.add_listener(self._on_model_event)
@@ -81,14 +95,14 @@ class LayerOrderController(QObject):
         for signal, slot in self._connections:
             signal.connect(slot)
 
-    def _timer(self, ms: int, slot) -> QTimer:
+    def _timer(self, ms: int, slot: Callable[[], None]) -> QTimer:
         t = QTimer(self)
         t.setSingleShot(True)
         t.setInterval(ms)
         t.timeout.connect(slot)
         return t
 
-    def _qgis_connections(self):
+    def _qgis_connections(self) -> list[tuple[pyqtBoundSignal, Callable[..., None]]]:
         proj = QgsProject.instance()
         root = proj.layerTreeRoot()
         return [
@@ -179,11 +193,21 @@ class LayerOrderController(QObject):
             raw = proj.readEntry(scope, ENTRY_TREE, "")[0] or ""
             with model.block_notifications():
                 model.set_control_enabled(root.hasCustomLayerOrder())
-                model.load_from_json(raw)
+                try:
+                    model.load_from_json(raw)
+                except DocumentError as e:
+                    # Keep it: the next save would otherwise overwrite it
+                    proj.writeEntry(ENTRY_SCOPE, ENTRY_TREE_UNREADABLE, raw)
+                    log.warning("the saved layer order is unreadable (%s): it is kept in the project "
+                                "as %s/%s; starting from QGIS's order", e, ENTRY_SCOPE, ENTRY_TREE_UNREADABLE)
+                    model.load_from_json("")
                 self._sync_layer_set()
         except Exception:
-            # A corrupt project entry must not take the plugin down
+            # Anything else must not take the plugin (or QGIS's project
+            # loading) down, but in debug mode it should fail loudly
             log.exception("loading the project's layer order failed")
+            if debug_mode():
+                raise
         finally:
             self._loading = False
         self.project_loaded.emit()
@@ -230,7 +254,7 @@ class LayerOrderController(QObject):
     # ==================================================================
     # Layers added / removed / renamed / visibility
     # ==================================================================
-    def _on_layers_added(self, layers) -> None:
+    def _on_layers_added(self, layers: list[QgsMapLayer]) -> None:
         if self._loading:
             return
         self._pending_layers.extend(lyr.id() for lyr in layers)
@@ -241,61 +265,41 @@ class LayerOrderController(QObject):
         known = set(self._model.iter_layer_ids())
         self._place_layers([lid for lid in dict.fromkeys(pending) if lid not in known])
 
-    def _place_layers(self, layer_ids: list) -> None:
-        """Insert layers next to their nearest Layers-panel neighbour already
-        in the Model (before the one below it, else after the one above).
-        Layers missing from the Layers panel count as being at its bottom.
-        One sweep of the panel order and one Model splice: O(n)."""
+    def _place_layers(self, layer_ids: list[str]) -> None:
+        """Insert new layers next to their Layers-panel neighbours (see
+        reconcile.plan_new_layers): one panel sweep, one Model splice, O(n)."""
         proj = QgsProject.instance()
         known = set(self._model.iter_layer_ids())
         new = [lid for lid in dict.fromkeys(layer_ids)
                if lid not in known and proj.mapLayer(lid) is not None]
         if not new:
             return
-        targets = set(new)
-        order = [lid for lid in self._layer_panel_order() if lid in known or lid in targets]
-        in_panel = set(order)
-        order += [lid for lid in new if lid not in in_panel]
+        plan = plan_new_layers(self._layer_panel_order(), known, new)
         nodes = self._layer_tree_nodes()
 
-        def entry(lid, anchor, after):
+        def facts(lid: str) -> tuple[str, bool]:
             node = nodes.get(lid)
-            return (lid, proj.mapLayer(lid).name(),
-                    node.isVisible() if node is not None else True, anchor, after)
+            return proj.mapLayer(lid).name(), node.isVisible() if node is not None else True
 
-        # Bottom-up: each new layer goes before the nearest known layer below
-        placements, below, trailing = [], None, []
-        for lid in reversed(order):
-            if lid in known:
-                below = lid
-            elif below is not None:
-                placements.append(entry(lid, below, False))
-            else:
-                trailing.append(lid)
-        placements.reverse()
-        # Below every known layer: after the lowest one, in panel order
-        above = next((lid for lid in reversed(order) if lid in known), None)
-        if above is not None:
-            placements += [entry(lid, above, True) for lid in reversed(trailing)]
-            self._model.add_layers_beside(placements)
+        if known:
+            self._model.add_layers_beside([(lid, *facts(lid), anchor, after) for lid, anchor, after in plan])
         else:
-            with self._model.block_notifications():     # nothing known: append
-                for lid in reversed(trailing):
-                    _, name, visible, _, _ = entry(lid, None, True)
-                    self._model.add_layer(lid, name, visible)
+            with self._model.block_notifications():     # nothing to anchor on: append
+                for lid, _anchor, _after in plan:
+                    self._model.add_layer(lid, *facts(lid))
 
-    def _on_layers_removed(self, layer_ids) -> None:
+    def _on_layers_removed(self, layer_ids: list[str]) -> None:
         if self._loading:
             return
         removed = set(layer_ids or [])
         self._pending_layers = [lid for lid in self._pending_layers if lid not in removed]
         self._model.remove_layers(removed)
 
-    def _on_tree_name_changed(self, node, name) -> None:
+    def _on_tree_name_changed(self, node: QgsLayerTreeNode, name: str) -> None:
         if QgsLayerTree.isLayer(node):
             self._model.rename_layer(node.layerId(), name)
 
-    def _on_tree_visibility_changed(self, node) -> None:
+    def _on_tree_visibility_changed(self, node: QgsLayerTreeNode) -> None:
         layers = node.findLayers() if QgsLayerTree.isGroup(node) else [node]
         for ltl in layers:
             self._model.set_visibility(ltl.layerId(), ltl.isVisible())
@@ -303,7 +307,7 @@ class LayerOrderController(QObject):
     # ==================================================================
     # Rendering-order control
     # ==================================================================
-    def _on_has_custom_order_changed(self, *_args) -> None:
+    def _on_has_custom_order_changed(self, *_args: object) -> None:
         enabled = QgsProject.instance().layerTreeRoot().hasCustomLayerOrder()
         self._model.set_control_enabled(enabled)
         if self._applying or self._loading:

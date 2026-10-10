@@ -28,10 +28,12 @@ import copy
 import json
 import logging
 import uuid
-from collections.abc import Callable, Iterator
+from collections.abc import Callable, Iterable, Iterator
 from contextlib import contextmanager
 from dataclasses import dataclass, field
 from typing import Union
+
+from .debug import debug_mode
 
 log = logging.getLogger("AdvancedLayerOrder.model")
 
@@ -68,6 +70,10 @@ class GroupNode:
 
 
 Node = Union[GroupNode, LayerNode]   # runtime alias: no `|` (Python 3.9)
+
+
+class DocumentError(ValueError):
+    """A saved document that cannot be read (see load_from_json)."""
 
 
 def new_group_id() -> str:
@@ -126,6 +132,7 @@ class LayerOrderModel:
         self._suppressed = False          # something was emitted while blocked
         self._suppressed_structural = False
         self._control_enabled = False     # mirror of QGIS's hasCustomLayerOrder
+        self._skipped_children = 0        # malformed nodes seen by load_from_json
 
     # ------------------------------------------------------------------
     # Listeners
@@ -140,7 +147,7 @@ class LayerOrderModel:
             self._listeners.remove(cb)
 
     @contextmanager
-    def block_notifications(self):
+    def block_notifications(self) -> Iterator[LayerOrderModel]:
         """Batch mutations: no granular events inside, one resync on exit.
 
         On exit (outermost block only), if anything changed, listeners get
@@ -169,8 +176,10 @@ class LayerOrderModel:
                 cb(event_type, payload)
             except Exception:
                 # One failing listener must not break the others, but it
-                # must not vanish either.
+                # must not vanish either; in debug mode, fail loudly.
                 log.exception("listener failed on %s", event_type)
+                if debug_mode():
+                    raise
 
     def _structure_changed(self, event_type: str, payload: dict) -> None:
         self._emit(event_type, payload)
@@ -185,7 +194,7 @@ class LayerOrderModel:
 
     def walk(self) -> Iterator[tuple[Node, GroupNode | None]]:
         """Yield (node, parent) for every node, pre-order (display order)."""
-        def rec(nodes, parent):
+        def rec(nodes: list[Node], parent: GroupNode | None) -> Iterator[tuple[Node, GroupNode | None]]:
             for n in nodes:
                 yield n, parent
                 if isinstance(n, GroupNode):
@@ -201,7 +210,7 @@ class LayerOrderModel:
         if self._index is None:
             index: dict[str, tuple[Node, GroupNode | None, int]] = {}
 
-            def rec(nodes, parent):
+            def rec(nodes: list[Node], parent: GroupNode | None) -> None:
                 for i, n in enumerate(nodes):
                     index[n.id] = (n, parent, i)
                     if isinstance(n, GroupNode):
@@ -268,7 +277,7 @@ class LayerOrderModel:
             return []
         out: list[str] = []
 
-        def rec(n):
+        def rec(n: GroupNode) -> None:
             for ch in n.children:
                 if isinstance(ch, LayerNode):
                     out.append(ch.id)
@@ -293,10 +302,13 @@ class LayerOrderModel:
     # Bulk operations
     # ------------------------------------------------------------------
     def load_from_json(self, raw_json: str) -> None:
-        """Replace the tree with a persisted document.
+        """Replace the tree with a persisted document ("" = empty tree).
 
-        Malformed input is tolerated: bad JSON gives an empty tree; nodes
-        without id, of unknown type, or whose id was already seen are skipped.
+        Raises DocumentError, leaving the tree untouched, if the document is
+        unreadable (not JSON, or not ``{"children": [...]}``): the caller
+        decides what to do with it rather than silently losing it. Inside a
+        readable document, nodes without id, of unknown type, or whose id
+        was already seen are skipped, with a warning.
         """
         log.debug("load_from_json")
         new_root: list[Node] = []
@@ -304,17 +316,27 @@ class LayerOrderModel:
         if raw_json:
             try:
                 obj = json.loads(raw_json)
-            except (json.JSONDecodeError, TypeError):
-                obj = {}
-            for raw in obj.get("children", []) if isinstance(obj, dict) else []:
+            except (json.JSONDecodeError, TypeError) as e:
+                raise DocumentError(f"not JSON: {e}") from e
+            children = obj.get("children", []) if isinstance(obj, dict) else None
+            if not isinstance(children, list):
+                raise DocumentError('not a {"children": [...]} document')
+            skipped = 0
+            for raw in children:
                 node = self._build_node(raw, seen)
-                if node is not None:
+                if node is None:
+                    skipped += 1
+                else:
                     new_root.append(node)
+            skipped += self._skipped_children
+            self._skipped_children = 0
+            if skipped:
+                log.warning("saved layer order: skipped %d malformed node(s)", skipped)
         self._root = new_root
         self._dirty()
         self._structure_changed(EVENT_MODEL_LOADED, {})
 
-    def _build_node(self, raw, seen: set[str]) -> Node | None:
+    def _build_node(self, raw: object, seen: set[str]) -> Node | None:
         if not isinstance(raw, dict):
             return None
         t = raw.get("type")
@@ -323,7 +345,9 @@ class LayerOrderModel:
             return None
         if t == TYPE_GROUP:
             seen.add(node_id)
-            children = [c for c in (self._build_node(ch, seen) for ch in raw.get("children", [])) if c]
+            built = [self._build_node(ch, seen) for ch in raw.get("children", [])]
+            children = [c for c in built if c is not None]
+            self._skipped_children += len(built) - len(children)
             return GroupNode(
                 id=node_id,
                 name=raw.get("name", "Group"),
@@ -359,7 +383,7 @@ class LayerOrderModel:
         snapshot = LayerOrderModel()
         snapshot.load_from_json(raw_json)
 
-        def adopt(nodes):
+        def adopt(nodes: list[Node]) -> list[Node]:
             out = []
             for n in nodes:
                 if isinstance(n, GroupNode):
@@ -382,7 +406,7 @@ class LayerOrderModel:
             else:
                 after.setdefault(prev, []).append(copy.copy(current[lid]))
 
-        def splice(nodes):
+        def splice(nodes: list[Node]) -> list[Node]:
             out = []
             for n in nodes:
                 if isinstance(n, GroupNode):
@@ -450,7 +474,7 @@ class LayerOrderModel:
             else:
                 (after if is_after else before).setdefault(anchor_id, []).append(node)
 
-        def splice(nodes):
+        def splice(nodes: list[Node]) -> list[Node]:
             out = []
             for n in nodes:
                 out.extend(before.get(n.id, ()))
@@ -473,7 +497,7 @@ class LayerOrderModel:
         """Remove a layer. Its group stays, even if now empty."""
         self.remove_layers([layer_id])
 
-    def remove_layers(self, layer_ids) -> None:
+    def remove_layers(self, layer_ids: Iterable[str]) -> None:
         """Batch remove_layer(), in one pass over the tree (O(n))."""
         gone = {lid for lid in layer_ids if isinstance(self.find_item(lid), LayerNode)}
         if not gone:
@@ -481,7 +505,7 @@ class LayerOrderModel:
         log.debug("remove_layers %d layer(s)", len(gone))
         removed: list[str] = []
 
-        def keep(nodes):
+        def keep(nodes: list[Node]) -> list[Node]:
             out = []
             for n in nodes:
                 if isinstance(n, GroupNode):
@@ -650,7 +674,7 @@ class LayerOrderModel:
 
     def move_items_to_boundary(self, item_ids: list[str], to_top: bool) -> None:
         """Move each item to the top (or bottom) of its own parent, keeping their order."""
-        log.debug("move_items_to_boundary")
+        log.debug("move_items_to_boundary %s top=%s", item_ids, to_top)
         by_parent: dict = {}
         positioned = [i for i in item_ids if self.get_index_in_parent(i) is not None]
         for item_id in sorted(positioned, key=self.get_index_in_parent):

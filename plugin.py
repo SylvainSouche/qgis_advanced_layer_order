@@ -20,6 +20,10 @@ QGIS (no Edit-menu entries, no Ctrl+Z): QGIS's undo is the edit buffer of
 the layer being edited, and sharing its keys or menu was ambiguous. The
 panel has its own Undo / Redo buttons.
 """
+from __future__ import annotations
+
+from typing import TYPE_CHECKING
+
 from qgis.PyQt.QtCore import QObject, Qt, QTimer
 
 from .controller import LayerOrderController
@@ -29,13 +33,16 @@ from .model import LayerOrderModel
 from .view import LayerOrderView
 from .view_controller import ViewController
 
+if TYPE_CHECKING:
+    from qgis.gui import QgisInterface
+
 MENU = "Advanced Layer Order"
 
 
 class AdvancedLayerOrderPlugin(QObject):
     """QGIS plugin entry point (see classFactory in __init__.py)."""
 
-    def __init__(self, iface):
+    def __init__(self, iface: QgisInterface) -> None:
         super().__init__()
         self.iface = iface
         self.model = None
@@ -47,7 +54,7 @@ class AdvancedLayerOrderPlugin(QObject):
     # ==================================================================
     # Lifecycle
     # ==================================================================
-    def initGui(self):
+    def initGui(self) -> None:
         mw = self.iface.mainWindow()
         self.model = LayerOrderModel()
         self.view = LayerOrderView(mw)
@@ -77,7 +84,7 @@ class AdvancedLayerOrderPlugin(QObject):
         # Load whatever project is open once QGIS has finished starting up
         QTimer.singleShot(0, self.controller.load_project)
 
-    def unload(self):
+    def unload(self) -> None:
         if self.controller is not None:
             self.controller.teardown()
         if self._toggle_action is not None:
@@ -88,6 +95,6 @@ class AdvancedLayerOrderPlugin(QObject):
             self.view.deleteLater()   # also deletes the ViewController and Controller
         self.model = self.view = self.view_controller = self.controller = None
 
-    def _set_verbose(self, on: bool):
+    def _set_verbose(self, on: bool) -> None:
         set_verbose(on)
         self.view.render_verbose(on)

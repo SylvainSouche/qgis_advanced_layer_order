@@ -17,8 +17,9 @@ its selection, expansion and scroll position on its own.
 from __future__ import annotations
 
 import json
+from collections.abc import Iterator
 
-from qgis.PyQt.QtCore import QAbstractItemModel, QMimeData, QModelIndex, Qt, pyqtSignal
+from qgis.PyQt.QtCore import QAbstractItemModel, QMimeData, QModelIndex, QObject, Qt, pyqtSignal
 from qgis.PyQt.QtGui import QIcon
 
 from .icons import icon_group
@@ -48,7 +49,7 @@ class _Item:
     __slots__ = ("children", "icon", "id", "layers", "name", "parent", "row_",
                  "shown", "type", "visible")
 
-    def __init__(self, node: dict | None, parent: _Item | None):
+    def __init__(self, node: dict | None, parent: _Item | None) -> None:
         self.parent = parent
         node = node or {"type": TYPE_GROUP, "id": "", "name": ""}
         self.id: str = node["id"]
@@ -69,7 +70,7 @@ class _Item:
     def row(self) -> int:
         return self.row_
 
-    def walk(self):
+    def walk(self) -> Iterator[_Item]:
         for ch in self.children:
             yield ch
             yield from ch.walk()
@@ -90,7 +91,7 @@ class LayerOrderItemModel(QAbstractItemModel):
     drop_intent = pyqtSignal(list, str, str)   # moving ids, target id, DROP_* position
     check_intent = pyqtSignal(str, bool)       # item id, checked
 
-    def __init__(self, parent=None):
+    def __init__(self, parent: QObject | None = None) -> None:
         super().__init__(parent)
         self._root = _Item(None, None)
         self._by_id: dict[str, _Item] = {}
@@ -168,7 +169,7 @@ class LayerOrderItemModel(QAbstractItemModel):
             return QModelIndex()
         return self.createIndex(row, 0, self._item(parent).children[row])
 
-    def parent(self, index: QModelIndex = None):
+    def parent(self, index: QModelIndex | None = None) -> QModelIndex | QObject | None:
         if index is None:
             return super().parent()  # QObject.parent()
         if not index.isValid():
@@ -187,7 +188,7 @@ class LayerOrderItemModel(QAbstractItemModel):
     # ------------------------------------------------------------------
     # QAbstractItemModel — data
     # ------------------------------------------------------------------
-    def data(self, index: QModelIndex, role: int = Qt.ItemDataRole.DisplayRole):
+    def data(self, index: QModelIndex, role: int = Qt.ItemDataRole.DisplayRole) -> object:
         if not index.isValid():
             return None
         item: _Item = index.internalPointer()
@@ -207,7 +208,7 @@ class LayerOrderItemModel(QAbstractItemModel):
         # The root accepts drops too (empty area below the last row)
         return _FLAGS if index.isValid() else Qt.ItemFlag.ItemIsDropEnabled
 
-    def setData(self, index: QModelIndex, value, role: int = Qt.ItemDataRole.EditRole) -> bool:
+    def setData(self, index: QModelIndex, value: object, role: int = Qt.ItemDataRole.EditRole) -> bool:
         """A checkbox click: report it, change nothing."""
         if index.isValid() and role == Qt.ItemDataRole.CheckStateRole:
             item: _Item = index.internalPointer()
@@ -226,7 +227,7 @@ class LayerOrderItemModel(QAbstractItemModel):
     def mimeTypes(self) -> list[str]:
         return [MIME_IDS]
 
-    def mimeData(self, indexes) -> QMimeData:
+    def mimeData(self, indexes: list[QModelIndex]) -> QMimeData:
         ids = list(dict.fromkeys(ix.data(ROLE_ID) for ix in indexes if ix.isValid()))
         mime = QMimeData()
         mime.setData(MIME_IDS, json.dumps(ids).encode("utf-8"))
@@ -241,7 +242,8 @@ class LayerOrderItemModel(QAbstractItemModel):
         except ValueError:
             return []
 
-    def canDropMimeData(self, mime, action, row, column, parent) -> bool:
+    def canDropMimeData(self, mime: QMimeData, action: Qt.DropAction, row: int, column: int,
+                        parent: QModelIndex) -> bool:
         moving = set(self._moving_ids(mime))
         if not moving:
             return False
@@ -252,7 +254,8 @@ class LayerOrderItemModel(QAbstractItemModel):
             item = item.parent
         return True
 
-    def dropMimeData(self, mime, action, row, column, parent) -> bool:
+    def dropMimeData(self, mime: QMimeData, action: Qt.DropAction, row: int, column: int,
+                     parent: QModelIndex) -> bool:
         """Translate Qt's (row, parent) drop into an intent; never mutate."""
         if not self.canDropMimeData(mime, action, row, column, parent):
             return False

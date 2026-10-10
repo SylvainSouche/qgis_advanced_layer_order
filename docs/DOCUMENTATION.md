@@ -127,6 +127,7 @@ Group structure itself (creating, nesting) is only edited in ALO.
 | Project entry | Content |
 |---|---|
 | `AdvancedLayerOrder / tree_json` | The groups and the order: `{"version": 1, "children": [...]}` with group nodes (`id`, `name`, `expanded`, `children`) and layer nodes (`id`, `name`) |
+| `AdvancedLayerOrder / tree_json_unreadable` | Only if a saved tree could not be read (damaged project file): a copy of it, so it is not lost. The panel then starts from QGIS's order and a warning is logged |
 
 Projects saved with *Layer Order Plus* or early builds of this plugin keep
 their groups: their `BetterLayerOrder` entries are read when no

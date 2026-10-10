@@ -163,6 +163,24 @@ selected blocks move together and nothing ever leaves its group.
   invariants the bounds rely on (the Model's id index never stale, batch
   edits equal one-by-one edits).
 
+## Invariants
+
+* **Saved document**: `AdvancedLayerOrder/tree_json` =
+  `{"version": TREE_JSON_SCHEMA_VERSION, "children": [...]}` (version 1;
+  `model.py`). Group ids are `grp_` + 10 hex digits (`new_group_id`), layer
+  ids are QGIS's. An unreadable document raises `DocumentError`; the
+  Controller keeps it as `AdvancedLayerOrder/tree_json_unreadable` and
+  starts from QGIS's order, so it is never silently overwritten.
+* **Ids are unique** across the tree; the Model's id index relies on it.
+* **Timing** (`controller.py`): `APPLY_DEBOUNCE_MS` (50) coalesces Model
+  changes into one `setCustomLayerOrder`; `PLACE_DELAY_MS` (0) places new
+  layers on the next event-loop turn. QGIS's Layer Order panel changes are
+  handled synchronously (see Sync with QGIS).
+* **Errors**: only two catch-all handlers (project load, Model listeners);
+  both log with a traceback, and re-raise when QGIS runs with `QGIS_DEBUG`
+  (`debug.py`).
+* **Types**: every runtime function is fully annotated (`ruff` `ANN`).
+
 ## Translations
 
 No translation files are shipped. `i18n.py` lists the panel's labels as
