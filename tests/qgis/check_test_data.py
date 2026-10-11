@@ -62,7 +62,7 @@ check(sorted(by_name) == list("ABCDE"), f"project layers {sorted(by_name)}")
 root = proj.layerTreeRoot()
 check([n.name() for n in root.findLayers()] == list("ABCDE"), "Layers panel order A..E")
 check(not root.hasCustomLayerOrder(), "control off in the saved project")
-check("".join(lyr.name() for lyr in root.customLayerOrder()) == "EDCBA", "stale custom order E..A")
+check("".join(lyr.name() for lyr in root.customLayerOrder()) == "ABCDE", "custom order A..E")
 
 snapshots = sys.argv[sys.argv.index("--snapshots") + 1] if "--snapshots" in sys.argv else None
 for order in ("ABCDE", "EDCBA", "CEADB", "BADCE"):
@@ -86,8 +86,8 @@ for order, expected in (("ABFCDE", f_colour), ("ABCFDE", spec.LAYERS["C"][0])):
     if snapshots and order == "ABFCDE":
         image.save(os.path.join(snapshots, "test-map-ABFCDE.png"))
 
-# How Advanced Layer Order first sees this project: no saved tree → the
-# Layers-panel order, control off
+# How Advanced Layer Order first sees this project: no ALO data → QGIS's
+# custom order, control off
 model = LayerOrderModel()
 ctl = LayerOrderController(model, FakeIface())
 ctl.load_project()

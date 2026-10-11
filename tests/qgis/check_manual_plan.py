@@ -162,6 +162,12 @@ root.removeChildNode(e_node)
 expect("1.5", "A, B, C, D, E", "A B C D E", "A")
 view.chk_control.click()                              # 1.6
 expect("1.6", native="E A B C D", top="E")
+saved = os.path.join(WORK, "saved.qgz")               # 1.7: save, reopen (no groups: no ALO data)
+proj.write(saved)
+check(not proj.entryList("AdvancedLayerOrder", ""), "1.7 no ALO data saved without groups")
+proj.read(saved)
+ctl.load_project()
+expect("1.7", "A, B, C, D, E", "E A B C D", "E")
 
 # 2. Groups
 baseline()

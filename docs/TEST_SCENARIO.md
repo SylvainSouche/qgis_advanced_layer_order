@@ -51,12 +51,13 @@ and D, and A covering B:
 
 ![Map with C E A D B](img/test-map-CEADB.png)
 
-**The project as saved** reproduces known traps:
+**The project as saved**:
 
 * Layers panel order: A B C D E (top to bottom).
-* "Control rendering order" is **off**, and a stale custom order
-  E D C B A is stored.
-* No Advanced Layer Order tree is saved.
+* "Control rendering order" is **off**; QGIS's custom order A B C D E is
+  stored.
+* No Advanced Layer Order data is saved (no groups): ALO starts from
+  QGIS's custom order.
 
 ### Notation
 
@@ -92,12 +93,13 @@ Open `tests/data/test.qgz`. The rows are cumulative.
 | # | Action | ALO | Native | Map |
 |---|---|---|---|---|
 | 1.1 | (project just opened) | `A, B, C, D, E`, greyed out, control **off** | checkbox off, greyed: `A B C D E` | centre **red** (A) |
-| 1.2 | Tick **Control rendering order** in **ALO** | tree enabled, control on | checkbox **on**: `A B C D E` (not `E D C B A`) | centre red |
+| 1.2 | Tick **Control rendering order** in **ALO** | tree enabled, control on | checkbox **on**: `A B C D E` | centre red |
 | 1.3 | Untick it in ALO | greyed, control off | checkbox off: `A B C D E` | centre red |
 | 1.4 | Tick it in the **Native** panel | follows: control on, tree enabled | `A B C D E` | centre red |
 | 1.5 | In the **Layers** panel, drag E to the top | unchanged | unchanged | centre still **red**: the custom order rules |
 | 1.6 | Untick control (either panel) | control off | `E A B C D` (the Layers panel order) | centre **blue** (E) |
-| 1.7 | Layers panel: drag E back to the bottom; tick control again | control on, `A, B, C, D, E` | `A B C D E` | centre red |
+| 1.7 | **Save** the project, close it, reopen it | `A, B, C, D, E`, control off: QGIS's custom order, **not** the Layers panel's. No ALO data was saved (no groups) | checkbox off: `E A B C D` | centre blue (E) |
+| 1.8 | Layers panel: drag E back to the bottom; tick control again | control on, `A, B, C, D, E` | `A B C D E` | centre red |
 
 ## 2. Groups — the baseline
 

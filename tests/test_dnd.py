@@ -449,3 +449,27 @@ def test_one_history_for_alo_and_native_panel_reorders(mvc):
     mvc.vc.undo_stack.redo()
     mvc.vc.undo_stack.redo()
     assert _model_shape(mvc.model.get_root()) == ["B", "A", "D", "C"]
+
+
+def test_context_menu_entries_and_intents(mvc, monkeypatch):
+    """The right-click menu builds on Qt 5 and 6 (QMenu.addAction(icon, text))
+    and each entry reports its intent."""
+    from qgis.PyQt.QtWidgets import QMenu
+
+    mvc.load(["X", ("g1", ["A", "B"]), "Y"])
+    view = mvc.view
+    view.render_selection(["g1"])
+    shown = []
+
+    def fake_exec(menu, *_args):
+        shown.append([(a.text(), a.isEnabled()) for a in menu.actions() if not a.isSeparator()])
+        return next(a for a in menu.actions() if a.text() == "Move to Bottom")
+
+    monkeypatch.setattr(QMenu, "exec", fake_exec)
+    seen = []
+    view.move_to_boundary_requested.connect(lambda ids, top: seen.append((ids, top)))
+    view._on_context_menu(view.tree.visualRect(view.item_model.index_of("g1")).center())
+    assert [t for t, _ in shown[0]] == ["Add Group", "Rename Group", "Remove Group", "Move up",
+                                        "Move down", "Move to Top", "Move to Bottom"]
+    assert all(enabled for _, enabled in shown[0])           # one group selected: all apply
+    assert seen == [(["g1"], False)]

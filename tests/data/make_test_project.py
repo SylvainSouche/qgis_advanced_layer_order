@@ -21,10 +21,10 @@ Design — the drawing order can be read off the map:
 Project state (chosen to exercise the known traps):
 
 * Layers panel order, top to bottom: A B C D E  → map centre is red (A).
-* A stale custom order E D C B A is saved with "Control rendering order"
-  OFF — the state in which QGIS's Layer Order panel used to show the wrong
-  order after activation (fixed in 1.2.27).
-* No Advanced Layer Order tree is saved: ALO starts from the QGIS order.
+* QGIS's custom order A B C D E is saved with "Control rendering order"
+  OFF.
+* No Advanced Layer Order data is saved (no groups): ALO starts from QGIS's
+  custom order.
 """
 import math
 import os
@@ -164,7 +164,7 @@ def build():
     for name in LAYERS:                        # A B C D E, top to bottom
         proj.addMapLayer(layers[name], False)
         root.addLayer(layers[name])
-    root.setCustomLayerOrder([layers[n] for n in reversed(LAYERS)])   # stale E..A
+    root.setCustomLayerOrder([layers[n] for n in LAYERS])             # A..E
     root.setHasCustomLayerOrder(False)
     proj.viewSettings().setDefaultViewExtent(
         QgsReferencedRectangle(QgsRectangle(-8500, -8000, 16500, 8000), crs))

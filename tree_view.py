@@ -24,10 +24,17 @@ from .tree_model import ROLE_ID, ROLE_TYPE
 
 
 class LayerOrderTree(QTreeView):
+    """The dock's tree. Reports expand/collapse and move keys as intents."""
+
     expand_intent = pyqtSignal(str, bool)   # group id, expanded
-    move_intent = pyqtSignal(bool)          # up
+    move_intent = pyqtSignal(bool)          # True = up, False = down
 
     def __init__(self, parent: QWidget | None = None) -> None:
+        """Configure a read-only tree that drags and drops, but never edits.
+
+        Args:
+            parent: Owning widget (the dock).
+        """
         super().__init__(parent)
         self.setHeaderHidden(True)
         self.setUniformRowHeights(True)
@@ -43,13 +50,15 @@ class LayerOrderTree(QTreeView):
         self.setDefaultDropAction(Qt.DropAction.MoveAction)
         self.doubleClicked.connect(self._toggle_intent)
 
-    def _toggle_intent(self, index: QModelIndex) -> bool:
-        if not index.isValid() or index.data(ROLE_TYPE) != TYPE_GROUP:
-            return False
-        self.expand_intent.emit(index.data(ROLE_ID), not self.isExpanded(index))
-        return True
-
+    # ------------------------------------------------------------------
+    # Qt input → intents
+    # ------------------------------------------------------------------
     def mousePressEvent(self, e: QMouseEvent) -> None:
+        """Report a click on a group's branch arrow; anything else is Qt's.
+
+        Args:
+            e: The mouse event.
+        """
         index = self.indexAt(event_pos(e))
         if index.isValid() and self.model().hasChildren(index):
             left = self.visualRect(index).left()
@@ -59,7 +68,12 @@ class LayerOrderTree(QTreeView):
         super().mousePressEvent(e)
 
     def keyPressEvent(self, e: QKeyEvent) -> None:
-        # Arrow keys carry KeypadModifier on macOS: ignore it
+        """Report Ctrl+↑/↓ and the expand/collapse keys; others are Qt's.
+
+        Args:
+            e: The key event. Arrow keys carry KeypadModifier on macOS,
+                which is ignored.
+        """
         mods = e.modifiers() & ~Qt.KeyboardModifier.KeypadModifier
         if mods == Qt.KeyboardModifier.ControlModifier and e.key() in (Qt.Key.Key_Up, Qt.Key.Key_Down):
             self.move_intent.emit(e.key() == Qt.Key.Key_Up)
@@ -73,3 +87,17 @@ class LayerOrderTree(QTreeView):
                 self.expand_intent.emit(index.data(ROLE_ID), False)
                 return
         super().keyPressEvent(e)
+
+    def _toggle_intent(self, index: QModelIndex) -> bool:
+        """Report the wish to flip a group's expanded state.
+
+        Args:
+            index: The row clicked or double-clicked.
+
+        Returns:
+            True if the row is a group (an intent was emitted).
+        """
+        if not index.isValid() or index.data(ROLE_TYPE) != TYPE_GROUP:
+            return False
+        self.expand_intent.emit(index.data(ROLE_ID), not self.isExpanded(index))
+        return True

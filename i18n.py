@@ -32,6 +32,14 @@ ENTRIES = (ADD_GROUP, RENAME_GROUP, REMOVE_GROUP, MOVE_UP, MOVE_DOWN, MOVE_TO_TO
 
 
 def tr(entry: tuple[str, str]) -> str:
-    """`entry` in the user's language, without accelerator (&) or ellipsis."""
+    """Translate a borrowed QGIS label into the user's language.
+
+    Args:
+        entry: A ``(context, English text)`` pair from this module.
+
+    Returns:
+        QGIS's translation (the English text without a translator), without
+        keyboard accelerator (``&``) or trailing ellipsis.
+    """
     text = QCoreApplication.translate(*entry)
     return text.replace("&", "").rstrip(".… ")

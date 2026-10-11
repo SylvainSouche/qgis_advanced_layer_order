@@ -8,20 +8,29 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
-if TYPE_CHECKING:
-    from qgis.PyQt.QtCore import QPoint
-    from qgis.PyQt.QtGui import QDropEvent, QMouseEvent
-
 try:   # Qt 6: the undo framework moved to QtGui
     from qgis.PyQt.QtGui import QUndoCommand, QUndoStack
 except ImportError:   # Qt 5
     from qgis.PyQt.QtWidgets import QUndoCommand, QUndoStack
 
+if TYPE_CHECKING:
+    from qgis.PyQt.QtCore import QPoint
+    from qgis.PyQt.QtGui import QDropEvent, QMouseEvent
+
 __all__ = ["QUndoCommand", "QUndoStack", "event_pos"]
 
 
 def event_pos(event: QMouseEvent | QDropEvent) -> QPoint:
-    """Position of a mouse event in widget coordinates (QPoint)."""
+    """Give a mouse or drop event's position in widget coordinates.
+
+    Qt 6 replaced ``pos()`` with ``position()`` (a QPointF).
+
+    Args:
+        event: The mouse or drop event.
+
+    Returns:
+        The position as an integer QPoint, on Qt 5 and Qt 6 alike.
+    """
     if hasattr(event, "position"):   # Qt 6
         return event.position().toPoint()
     return event.pos()               # Qt 5

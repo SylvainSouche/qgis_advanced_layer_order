@@ -156,7 +156,11 @@ selected blocks move together and nothing ever leaves its group.
   is never freed — connect bound methods or signals.
 * `make test-data` — regenerates the manual-test project
   (`tests/data/make_test_project.py`).
-* `make lint` — ruff.
+* `make lint` — ruff, including type annotations (`ANN`) and docstrings
+  (`D`, Google style) for the plugin's code. Layout and documentation
+  conventions: [CODE_STYLE.md](CODE_STYLE.md); `tests/test_code_style.py`
+  checks that every function (private and nested ones included) is
+  documented with its arguments and return value.
 * `make bench` — time and memory against the number of layers
   (`tests/perf/`); results and complexity per operation in
   [PERFORMANCE.md](PERFORMANCE.md). `tests/test_scaling.py` guards the
@@ -171,6 +175,12 @@ selected blocks move together and nothing ever leaves its group.
   ids are QGIS's. An unreadable document raises `DocumentError`; the
   Controller keeps it as `AdvancedLayerOrder/tree_json_unreadable` and
   starts from QGIS's order, so it is never silently overwritten.
+* **Only groups are persisted**: `tree_json` is written only while the tree
+  has a group; otherwise the Controller removes it (and the legacy
+  `BetterLayerOrder` entries), since QGIS saves the custom order itself.
+  A project without groups starts from QGIS's custom order. Applying a
+  *different* order to QGIS marks the project modified; re-applying the
+  same order (project open) does not.
 * **Ids are unique** across the tree; the Model's id index relies on it.
 * **Timing** (`controller.py`): `APPLY_DEBOUNCE_MS` (50) coalesces Model
   changes into one `setCustomLayerOrder`; `PLACE_DELAY_MS` (0) places new
