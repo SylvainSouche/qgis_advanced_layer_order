@@ -73,3 +73,39 @@ def test_section_banners_follow_the_convention(path: pathlib.Path) -> None:
     bad = [f"{path.name}:{i}: {line.strip()[:20]}…" for i, line in enumerate(lines, 1)
            if re.match(r"^\s*# [=\-]{10,}", line) and not any(b.match(line) for b in BANNERS)]
     assert not bad, "\n" + "\n".join(bad)
+
+
+# QGIS 4 / Qt 6 want scoped enums (Qgis.MessageLevel.Critical, Qt.ItemDataRole.UserRole);
+# plugins.qgis.org's Qt6 checker rejects the short form (Qgis.Critical). Type
+# annotations name enum classes (-> Qt.CheckState) and are not values.
+def _annotation_nodes(tree: ast.Module) -> set[int]:
+    ids: set[int] = set()
+    for node in ast.walk(tree):
+        anns = []
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            a = node.args
+            anns = [p.annotation for p in a.posonlyargs + a.args + a.kwonlyargs] + [node.returns]
+            anns += [x.annotation for x in (a.vararg, a.kwarg) if x]
+        elif isinstance(node, ast.AnnAssign):
+            anns = [node.annotation]
+        for ann in anns:
+            if ann is not None:
+                ids.update(id(n) for n in ast.walk(ann))
+    return ids
+
+
+@pytest.mark.parametrize("path", MODULES, ids=lambda p: p.name)
+def test_enums_are_scoped(path: pathlib.Path) -> None:
+    tree = ast.parse(path.read_text(encoding="utf-8"))
+    skip = _annotation_nodes(tree)
+    parents = {id(ch): node for node in ast.walk(tree) for ch in ast.iter_child_nodes(node)}
+    bad = []
+    for node in ast.walk(tree):
+        if (isinstance(node, ast.Attribute) and isinstance(node.value, ast.Name)
+                and node.value.id in ("Qgis", "Qt") and node.attr[:1].isupper() and id(node) not in skip):
+            parent = parents.get(id(node))
+            scoped = isinstance(parent, ast.Attribute) and parent.value is node      # Qgis.MessageLevel.X
+            called = isinstance(parent, ast.Call) and parent.func is node           # Qgis.someFunction()
+            if not (scoped or called):
+                bad.append(f"{path.name}:{node.lineno}: {node.value.id}.{node.attr}")
+    assert not bad, "\n" + "\n".join(bad)

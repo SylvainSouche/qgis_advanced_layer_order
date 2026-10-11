@@ -27,11 +27,11 @@ class _QgisMessageLogHandler(logging.Handler):
         """
         from qgis.core import Qgis, QgsMessageLog
         if record.levelno >= logging.ERROR:
-            level = Qgis.Critical
+            level = Qgis.MessageLevel.Critical
         elif record.levelno >= logging.WARNING:
-            level = Qgis.Warning
+            level = Qgis.MessageLevel.Warning
         else:
-            level = Qgis.Info
+            level = Qgis.MessageLevel.Info
         QgsMessageLog.logMessage(self.format(record), LOG_TAG, level)
 
 
