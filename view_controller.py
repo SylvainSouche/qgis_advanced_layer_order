@@ -62,7 +62,11 @@ log = logging.getLogger("AdvancedLayerOrder.view_controller")
 
 
 class ViewController(QObject):
-    """Mediator between LayerOrderView and LayerOrderModel. Owns the undo stack."""
+    """Mediator between LayerOrderView and LayerOrderModel; owns the undo stack.
+
+    It never touches QGIS and never reads state back from the View: intents
+    carry their data, and QGIS-owned state is requested through signals.
+    """
 
     # Requests for QGIS-owned state — plugin.py wires them to the Controller
     visibility_requested = pyqtSignal(list, bool)   # layer ids, visible
@@ -71,6 +75,14 @@ class ViewController(QObject):
     def __init__(self, model: LayerOrderModel, view: LayerOrderView,
                  layer_icon: Callable[[str], QIcon] | None = None,
                  parent: QObject | None = None) -> None:
+        """Connect to the View's intents and the Model's events, then render.
+
+        Args:
+            model: The document.
+            view: The dock.
+            layer_icon: Gives the icon of a layer id (QGIS's own; none in tests).
+            parent: Owning QObject (the dock, so both are deleted together).
+        """
         super().__init__(parent)
         self._model = model
         self._view = view
@@ -94,21 +106,73 @@ class ViewController(QObject):
         v.control_toggled.connect(self.control_requested)
         self._render_all()
 
+    # ------------------------------------------------------------------
+    # Undo history
+    # ------------------------------------------------------------------
     def record_step(self, before: str, after: str, text: str) -> None:
-        """Add an already-applied change made outside the View (QGIS's Layer
-        Order panel) to the undo history, so the layer order has one linear
-        history whichever panel changed it."""
+        """Add an edit made outside the View to the undo history.
+
+        Reorders made in QGIS's Layer Order panel are already applied; recording
+        them keeps one linear history whichever panel changed the order.
+
+        Args:
+            before: The document before the edit.
+            after: The document after it.
+            text: The step's name (Undo / Redo tooltips).
+        """
         if before != after:
             self.undo_stack.push(TreeStateCommand(self._model, before, after, text))
 
     def reset_history(self) -> None:
-        """Forget undo history (new project)."""
+        """Forget the undo history (a project was opened, closed or created)."""
         self.undo_stack.clear()
 
-    # ==================================================================
+    def _on_undo_requested(self, undo: bool) -> None:
+        """Undo or redo one step (the panel's buttons).
+
+        Args:
+            undo: True for Undo, False for Redo.
+        """
+        if undo:
+            self.undo_stack.undo()
+        else:
+            self.undo_stack.redo()
+
+    @contextmanager
+    def _user_edit(self, text: str) -> Iterator[None]:
+        """Run one user action as a single Model transaction and undo step.
+
+        Inside, Model events are batched: one resync on exit renders the View
+        and lets the Controller apply the new order once. Nothing is recorded if
+        the action changed nothing.
+
+        Args:
+            text: The step's name (Undo / Redo tooltips).
+
+        Yields:
+            Nothing; the Model is edited inside the ``with`` block.
+        """
+        before = self._model.serialize()
+        with self._model.block_notifications():
+            yield
+        after = self._model.serialize()
+        if after != before:
+            self.undo_stack.push(TreeStateCommand(self._model, before, after, text))
+
+    # ------------------------------------------------------------------
     # Model → View
-    # ==================================================================
+    # ------------------------------------------------------------------
     def _on_model_event(self, event_type: str, payload: dict) -> None:
+        """Turn one Model event into View render calls.
+
+        Every structural change ends with ``order_changed``, so the tree is
+        rendered once, there (unless it trails a ``model_loaded`` already
+        rendered in full).
+
+        Args:
+            event_type: One of the Model's ``EVENT_*`` names.
+            payload: The event's data.
+        """
         v = self._view
         if event_type == EVENT_MODEL_LOADED:
             self._render_all()
@@ -128,17 +192,23 @@ class ViewController(QObject):
         elif event_type == EVENT_CONTROL_CHANGED:
             v.render_control_enabled(payload["enabled"])
 
-    def _render_undo_state(self, *_args: object) -> None:
-        s = self.undo_stack
-        self._view.render_undo_state(s.canUndo(), s.undoText(), s.canRedo(), s.redoText())
-
     def _render_all(self) -> None:
+        """Render everything: tree, undo buttons, control checkbox."""
         self._render_tree()
         self._render_undo_state()
         self._view.render_control_enabled(self._model.get_control_enabled())
 
     def _render_tree(self) -> None:
+        """Render the whole tree from the Model."""
         def as_dict(node: Node) -> dict:
+            """Convert a Model node to the dict the View renders.
+
+            Args:
+                node: A layer or group.
+
+            Returns:
+                The node dict (shape: ``LayerOrderView.render``), children included.
+            """
             if isinstance(node, GroupNode):
                 return {"type": TYPE_GROUP, "id": node.id, "name": node.name,
                         "expanded": node.expanded,
@@ -147,27 +217,28 @@ class ViewController(QObject):
                     "visible": node.visible, "icon": self._layer_icon(node.id)}
         self._view.render([as_dict(n) for n in self._model.get_root()])
 
-    # ==================================================================
-    # Undoable transactions
-    # ==================================================================
-    @contextmanager
-    def _user_edit(self, text: str) -> Iterator[None]:
-        """Run one user action as a single Model transaction + undo step.
+    def _render_undo_state(self, *_args: object) -> None:
+        """Render the Undo / Redo buttons from the undo stack.
 
-        Inside, Model events are batched (one resync on exit renders the
-        View and lets the Controller apply the new order once).
+        Args:
+            *_args: Ignored (the QUndoStack signal's value).
         """
-        before = self._model.serialize()
-        with self._model.block_notifications():
-            yield
-        after = self._model.serialize()
-        if after != before:
-            self.undo_stack.push(TreeStateCommand(self._model, before, after, text))
+        s = self.undo_stack
+        self._view.render_undo_state(s.canUndo(), s.undoText(), s.canRedo(), s.redoText())
 
-    # ==================================================================
-    # Intents → Model
-    # ==================================================================
+    # ------------------------------------------------------------------
+    # Intents → groups
+    # ------------------------------------------------------------------
     def _on_create_group(self, selected_ids: list) -> None:
+        """Create a group from the selection (Add Group).
+
+        With a single group selected, an empty subgroup is created at its top;
+        with other items selected, the new group wraps them in their place;
+        with nothing selected, an empty group goes at the bottom.
+
+        Args:
+            selected_ids: The selected items without a selected ancestor.
+        """
         model = self._model
         selected = self._in_tree_order(selected_ids)
         default = model.unique_group_name(tr(NEW_GROUP))
@@ -200,6 +271,13 @@ class ViewController(QObject):
         self._view.render_selection([gid])
 
     def _on_rename_group(self, group_id: str) -> None:
+        """Ask for a new name and rename a group (Rename Group).
+
+        A name already used gets a number appended.
+
+        Args:
+            group_id: The group.
+        """
         node = self._model.find_item(group_id)
         if not isinstance(node, GroupNode):
             return
@@ -212,6 +290,13 @@ class ViewController(QObject):
             self._model.rename_group(group_id, name)
 
     def _on_delete_groups(self, group_ids: list) -> None:
+        """Remove groups, their contents taking their place (Remove Group).
+
+        Deepest groups go first so nested selections unwrap cleanly.
+
+        Args:
+            group_ids: The groups.
+        """
         if not group_ids:
             return
         ordered = sorted(group_ids, key=self._model.get_depth, reverse=True)  # deepest first
@@ -219,45 +304,73 @@ class ViewController(QObject):
             for gid in ordered:
                 self._model.delete_group(gid, unwrap_children=True)
 
-    def _on_move_to_boundary(self, item_ids: list, to_top: bool) -> None:
-        if not item_ids:
-            return
-        with self._user_edit(tr(MOVE_TO_TOP if to_top else MOVE_TO_BOTTOM)):
-            self._model.move_items_to_boundary(item_ids, to_top=to_top)
-        self._view.render_selection(item_ids)
+    def _on_expand(self, group_id: str, expanded: bool) -> None:
+        # Expansion is UI state stored in the document; it is not undoable
+        """Store a group's expanded state (not undoable: it is display state).
 
-    def _on_undo_requested(self, undo: bool) -> None:
-        if undo:
-            self.undo_stack.undo()
-        else:
-            self.undo_stack.redo()
+        Args:
+            group_id: The group.
+            expanded: True to expand, False to collapse.
+        """
+        self._model.set_expanded(group_id, expanded)
 
+    # ------------------------------------------------------------------
+    # Intents → moves
+    # ------------------------------------------------------------------
     def _on_move_by_one(self, item_ids: list, up: bool) -> None:
+        """Move items one step up or down within their own group (Move up / down).
+
+        Args:
+            item_ids: The selected items.
+            up: True for up, False for down.
+        """
         if not item_ids:
             return
         with self._user_edit(tr(MOVE_UP if up else MOVE_DOWN)):
             self._model.move_items_by_one(item_ids, up)
         self._view.render_selection(self._in_tree_order(item_ids))
 
-    def _on_expand(self, group_id: str, expanded: bool) -> None:
-        # Expansion is UI state stored in the document; it is not undoable
-        self._model.set_expanded(group_id, expanded)
+    def _on_move_to_boundary(self, item_ids: list, to_top: bool) -> None:
+        """Move items to the top or bottom of their own group (Move to Top / Bottom).
 
-    def _on_check(self, item_id: str, checked: bool) -> None:
-        # Visibility belongs to QGIS: ask for it, the Model will follow
-        layer_ids = self._model.descendant_layer_ids(item_id)
-        if layer_ids:
-            self.visibility_requested.emit(layer_ids, checked)
+        Args:
+            item_ids: The selected items.
+            to_top: True for the top, False for the bottom.
+        """
+        if not item_ids:
+            return
+        with self._user_edit(tr(MOVE_TO_TOP if to_top else MOVE_TO_BOTTOM)):
+            self._model.move_items_to_boundary(item_ids, to_top=to_top)
+        self._view.render_selection(item_ids)
 
     def _on_drop(self, moving_ids: list, target_id: str, position: str) -> None:
         # Deferred: the View is still inside QDrag/dropEvent; re-rendering it
         # from there would delete items Qt is still using.
+        """Apply a drop on the next event-loop turn.
+
+        The View is still inside QDrag / dropEvent: re-rendering it from there
+        would delete items Qt is still using.
+
+        Args:
+            moving_ids: The dragged items.
+            target_id: The item dropped on / next to ("" for the empty area).
+            position: One of the ``DROP_*`` positions.
+        """
         ids = list(moving_ids)
         QTimer.singleShot(0, lambda: self.handle_drop(ids, target_id, position))
 
     def handle_drop(self, moving_ids: list, target_id: str, position: str) -> None:
-        """Apply a drop intent. Every case is one atomic Model.move_items()
-        anchored on a sibling id, so multi-item drops keep their order."""
+        """Apply a drop intent as one undoable move.
+
+        Every case is one atomic ``Model.move_items()`` anchored on a sibling id,
+        so multi-item drops keep their order. Dropping onto a layer creates a
+        group holding that layer and the dropped items.
+
+        Args:
+            moving_ids: The dragged items.
+            target_id: The item dropped on / next to ("" for the empty area).
+            position: One of the ``DROP_*`` positions.
+        """
         model = self._model
         movers = self._in_tree_order(moving_ids)
         if not movers:
@@ -294,17 +407,47 @@ class ViewController(QObject):
                 model.move_items(movers, parent_id, self._next_sibling_id(target_id, set(movers)))
         self._view.render_selection(movers)
 
-    # ==================================================================
-    # Helpers
-    # ==================================================================
     def _in_tree_order(self, item_ids: Iterable[str]) -> list[str]:
-        """Known ids from `item_ids`, de-duplicated, in display order."""
+        """Sort ids in display order, dropping unknown ones and duplicates.
+
+        Args:
+            item_ids: Layer / group ids.
+
+        Returns:
+            The known ids, top to bottom.
+        """
         order = self._model.tree_order_key()
         return sorted((i for i in dict.fromkeys(item_ids) if i in order), key=order.get)
 
     def _next_sibling_id(self, item_id: str, exclude: set) -> str | None:
-        """First sibling after `item_id` not in `exclude`, or None (= end)."""
+        """Find the first sibling after an item that is not excluded.
+
+        Args:
+            item_id: The item.
+            exclude: Ids to skip (the items being moved).
+
+        Returns:
+            That sibling's id, or None for "at the end".
+        """
         parent = self._model.find_parent(item_id)
         siblings = parent.children if parent is not None else self._model.get_root()
         idx = self._model.get_index_in_parent(item_id)
         return next((s.id for s in siblings[idx + 1:] if s.id not in exclude), None)
+
+    # ------------------------------------------------------------------
+    # Intents → requests for QGIS-owned state
+    # ------------------------------------------------------------------
+    def _on_check(self, item_id: str, checked: bool) -> None:
+        # Visibility belongs to QGIS: ask for it, the Model will follow
+        """Ask QGIS to show or hide the layers of a clicked checkbox.
+
+        Visibility belongs to QGIS: the request goes to the Controller and the
+        Model follows QGIS's answer.
+
+        Args:
+            item_id: The layer or group clicked.
+            checked: The wished state.
+        """
+        layer_ids = self._model.descendant_layer_ids(item_id)
+        if layer_ids:
+            self.visibility_requested.emit(layer_ids, checked)

@@ -31,25 +31,35 @@ DROP_ABOVE = "above"    # just above an item, same parent
 DROP_BELOW = "below"    # just below an item, same parent
 DROP_END = "end"        # empty area below the last row → bottom of the top level
 
-ROLE_ID = Qt.ItemDataRole.UserRole + 1
-ROLE_TYPE = Qt.ItemDataRole.UserRole + 2
+ROLE_ID = Qt.ItemDataRole.UserRole + 1     # data role: the layer / group id
+ROLE_TYPE = Qt.ItemDataRole.UserRole + 2   # data role: TYPE_LAYER or TYPE_GROUP
 
-MIME_IDS = "application/x-advanced-layer-order-ids"
+MIME_IDS = "application/x-advanced-layer-order-ids"   # drag payload: JSON list of ids
 
 _FLAGS = (Qt.ItemFlag.ItemIsEnabled | Qt.ItemFlag.ItemIsSelectable | Qt.ItemFlag.ItemIsUserCheckable
           | Qt.ItemFlag.ItemIsDragEnabled | Qt.ItemFlag.ItemIsDropEnabled)
 
 
 class _Item:
-    """One rendered row. Plain data; the tree of these is replaced on render
-    (never restructured), so each item's row is fixed at construction. A
-    group's checkbox comes from its visible/total layer counts, kept up to
-    date by LayerOrderItemModel.set_visible: both are O(1) to read."""
+    """One rendered row: plain data, never restructured.
+
+    The whole tree of items is replaced on every render, so each item's row
+    is fixed at construction. A group's checkbox comes from its visible/total
+    layer counts, kept up to date by ``LayerOrderItemModel.set_visible``;
+    both reads are O(1).
+    """
 
     __slots__ = ("children", "icon", "id", "layers", "name", "parent", "row_",
                  "shown", "type", "visible")
 
     def __init__(self, node: dict | None, parent: _Item | None) -> None:
+        """Build an item and, recursively, its children from a rendered node.
+
+        Args:
+            node: The node dict (see ``LayerOrderView.render``), or None for the
+                invisible root.
+            parent: The parent item, or None for the root.
+        """
         self.parent = parent
         node = node or {"type": TYPE_GROUP, "id": "", "name": ""}
         self.id: str = node["id"]
@@ -68,14 +78,31 @@ class _Item:
             self.shown = sum(ch.shown for ch in self.children)
 
     def row(self) -> int:
+        """Give the item's position among its siblings.
+
+        Returns:
+            The row, fixed at construction.
+        """
         return self.row_
 
     def walk(self) -> Iterator[_Item]:
+        """Iterate over the descendants, pre-order (display order).
+
+        Yields:
+            Each item below this one.
+        """
         for ch in self.children:
             yield ch
             yield from ch.walk()
 
     def check_state(self) -> Qt.CheckState:
+        """Give the checkbox state shown for this row.
+
+        Returns:
+            A layer's own visibility; for a group, Checked / Unchecked /
+            PartiallyChecked from the visible/total layer counts (an empty group
+            shows Checked).
+        """
         if self.type == TYPE_LAYER:
             return Qt.CheckState.Checked if self.visible else Qt.CheckState.Unchecked
         if self.layers and not self.shown:
@@ -92,6 +119,11 @@ class LayerOrderItemModel(QAbstractItemModel):
     check_intent = pyqtSignal(str, bool)       # item id, checked
 
     def __init__(self, parent: QObject | None = None) -> None:
+        """Start with an empty tree.
+
+        Args:
+            parent: Owning QObject (the dock).
+        """
         super().__init__(parent)
         self._root = _Item(None, None)
         self._by_id: dict[str, _Item] = {}
@@ -100,7 +132,15 @@ class LayerOrderItemModel(QAbstractItemModel):
     # Rendering
     # ------------------------------------------------------------------
     def render(self, nodes: list[dict]) -> None:
-        """Show `nodes` (see LayerOrderView.render for the dict shape)."""
+        """Show a new tree.
+
+        When the set of ids is unchanged this is a layout change with persistent
+        indexes remapped by id, so the view keeps its selection, expansion and
+        scroll on its own; otherwise it is a model reset.
+
+        Args:
+            nodes: Top-level node dicts (shape: ``LayerOrderView.render``).
+        """
         new_root = _Item({"type": TYPE_GROUP, "id": "", "children": nodes}, None)
         new_by_id = {it.id: it for it in new_root.walk()}
         if new_by_id.keys() == self._by_id.keys():
@@ -118,6 +158,12 @@ class LayerOrderItemModel(QAbstractItemModel):
             self.endResetModel()
 
     def set_name(self, item_id: str, name: str) -> None:
+        """Show a new name for one row.
+
+        Args:
+            item_id: Layer or group id.
+            name: The name to display.
+        """
         item = self._by_id.get(item_id)
         if item is not None:
             item.name = name
@@ -125,7 +171,14 @@ class LayerOrderItemModel(QAbstractItemModel):
             self.dataChanged.emit(ix, ix, [Qt.ItemDataRole.DisplayRole])
 
     def set_visible(self, layer_id: str, visible: bool) -> None:
-        """Update a layer's checkbox and the derived state of its groups."""
+        """Show a layer's visibility and the derived state of its groups.
+
+        The groups' visible counts are updated along the ancestors: O(depth).
+
+        Args:
+            layer_id: The layer.
+            visible: Its effective visibility in QGIS.
+        """
         item = self._by_id.get(layer_id)
         if item is None or item.visible == bool(visible):
             return
@@ -141,16 +194,33 @@ class LayerOrderItemModel(QAbstractItemModel):
             item = item.parent
 
     def index_of(self, item_id: str) -> QModelIndex:
+        """Give the Qt index of an item.
+
+        Args:
+            item_id: Layer or group id.
+
+        Returns:
+            Its index, or an invalid index if it is not shown.
+        """
         item = self._by_id.get(item_id)
         if item is None:
             return QModelIndex()
         return self.createIndex(item.row(), 0, item)
 
     def nodes_in_order(self) -> list[str]:
-        """All ids in display (pre-order) order."""
+        """List every shown id in display (pre-order) order.
+
+        Returns:
+            The ids, top to bottom.
+        """
         return [it.id for it in self._root.walk()]
 
     def _emit_data_changed(self, parent: _Item) -> None:
+        """Tell the view that every row under `parent` may have new data.
+
+        Args:
+            parent: The item whose subtree changed (the root after a render).
+        """
         if parent.children:
             first = self.createIndex(0, 0, parent.children[0])
             last = self.createIndex(len(parent.children) - 1, 0, parent.children[-1])
@@ -161,15 +231,33 @@ class LayerOrderItemModel(QAbstractItemModel):
     # ------------------------------------------------------------------
     # QAbstractItemModel — structure
     # ------------------------------------------------------------------
-    def _item(self, index: QModelIndex) -> _Item:
-        return index.internalPointer() if index.isValid() else self._root
-
     def index(self, row: int, column: int, parent: QModelIndex = QModelIndex()) -> QModelIndex:
+        """Give the index of a child row (QAbstractItemModel).
+
+        Args:
+            row: Row under `parent`.
+            column: Always 0 (one column).
+            parent: Parent index; invalid for the top level.
+
+        Returns:
+            The index, or an invalid index if there is no such row.
+        """
         if column != 0 or not self.hasIndex(row, column, parent):
             return QModelIndex()
         return self.createIndex(row, 0, self._item(parent).children[row])
 
     def parent(self, index: QModelIndex | None = None) -> QModelIndex | QObject | None:
+        """Give an index's parent (QAbstractItemModel), or the QObject parent.
+
+        Qt uses the same name for ``QObject.parent()``: called without an index
+        it answers that one.
+
+        Args:
+            index: A Qt index, or None for the QObject parent.
+
+        Returns:
+            The parent index (invalid for top-level rows), or the QObject parent.
+        """
         if index is None:
             return super().parent()  # QObject.parent()
         if not index.isValid():
@@ -180,15 +268,52 @@ class LayerOrderItemModel(QAbstractItemModel):
         return self.createIndex(p.row(), 0, p)
 
     def rowCount(self, parent: QModelIndex = QModelIndex()) -> int:
+        """Give the number of child rows (QAbstractItemModel).
+
+        Args:
+            parent: Parent index; invalid for the top level.
+
+        Returns:
+            The number of children.
+        """
         return 0 if parent.column() > 0 else len(self._item(parent).children)
 
     def columnCount(self, parent: QModelIndex = QModelIndex()) -> int:
+        """Give the number of columns (QAbstractItemModel).
+
+        Args:
+            parent: Unused: every row has one column.
+
+        Returns:
+            1.
+        """
         return 1
+
+    def _item(self, index: QModelIndex) -> _Item:
+        """Give the item behind an index.
+
+        Args:
+            index: A Qt index of this model.
+
+        Returns:
+            Its item, or the invisible root for an invalid index.
+        """
+        return index.internalPointer() if index.isValid() else self._root
 
     # ------------------------------------------------------------------
     # QAbstractItemModel — data
     # ------------------------------------------------------------------
     def data(self, index: QModelIndex, role: int = Qt.ItemDataRole.DisplayRole) -> object:
+        """Give a row's data for a role (QAbstractItemModel).
+
+        Args:
+            index: The row.
+            role: Display (name), Decoration (icon), CheckState (visibility),
+                ROLE_ID or ROLE_TYPE.
+
+        Returns:
+            The value, or None for other roles and invalid indexes.
+        """
         if not index.isValid():
             return None
         item: _Item = index.internalPointer()
@@ -206,10 +331,31 @@ class LayerOrderItemModel(QAbstractItemModel):
 
     def flags(self, index: QModelIndex) -> Qt.ItemFlag:
         # The root accepts drops too (empty area below the last row)
+        """Give what a row allows (QAbstractItemModel).
+
+        Args:
+            index: The row; invalid for the empty area below the last row.
+
+        Returns:
+            Enabled, selectable, checkable, draggable and droppable for rows;
+            drop-only for the empty area.
+        """
         return _FLAGS if index.isValid() else Qt.ItemFlag.ItemIsDropEnabled
 
     def setData(self, index: QModelIndex, value: object, role: int = Qt.ItemDataRole.EditRole) -> bool:
-        """A checkbox click: report it, change nothing."""
+        """Report a checkbox click as an intent, and change nothing (QAbstractItemModel).
+
+        The checkbox keeps showing the real state until QGIS answers and the
+        ViewController renders it.
+
+        Args:
+            index: The row clicked.
+            value: Qt's new value (unused: the wish is the opposite of the state).
+            role: Only CheckStateRole is handled.
+
+        Returns:
+            False, so Qt does not update the row itself.
+        """
         if index.isValid() and role == Qt.ItemDataRole.CheckStateRole:
             item: _Item = index.internalPointer()
             self.check_intent.emit(item.id, item.check_state() != Qt.CheckState.Checked)
@@ -219,15 +365,38 @@ class LayerOrderItemModel(QAbstractItemModel):
     # QAbstractItemModel — drag and drop
     # ------------------------------------------------------------------
     def supportedDragActions(self) -> Qt.DropAction:
+        """Tell Qt that rows are only ever moved (QAbstractItemModel).
+
+        Returns:
+            MoveAction.
+        """
         return Qt.DropAction.MoveAction
 
     def supportedDropActions(self) -> Qt.DropAction:
+        """Tell Qt that drops are only ever moves (QAbstractItemModel).
+
+        Returns:
+            MoveAction.
+        """
         return Qt.DropAction.MoveAction
 
     def mimeTypes(self) -> list[str]:
+        """Name the drag payload format (QAbstractItemModel).
+
+        Returns:
+            The plugin's own MIME type: drags from elsewhere are refused.
+        """
         return [MIME_IDS]
 
     def mimeData(self, indexes: list[QModelIndex]) -> QMimeData:
+        """Pack the dragged rows' ids (QAbstractItemModel).
+
+        Args:
+            indexes: The selected indexes being dragged.
+
+        Returns:
+            MIME data holding the ids as JSON, without duplicates.
+        """
         ids = list(dict.fromkeys(ix.data(ROLE_ID) for ix in indexes if ix.isValid()))
         mime = QMimeData()
         mime.setData(MIME_IDS, json.dumps(ids).encode("utf-8"))
@@ -235,6 +404,14 @@ class LayerOrderItemModel(QAbstractItemModel):
 
     @staticmethod
     def _moving_ids(mime: QMimeData) -> list[str]:
+        """Unpack the dragged ids.
+
+        Args:
+            mime: The drag payload.
+
+        Returns:
+            The ids, or [] if the payload is missing or not ours.
+        """
         if mime is None or not mime.hasFormat(MIME_IDS):
             return []
         try:
@@ -244,6 +421,19 @@ class LayerOrderItemModel(QAbstractItemModel):
 
     def canDropMimeData(self, mime: QMimeData, action: Qt.DropAction, row: int, column: int,
                         parent: QModelIndex) -> bool:
+        """Tell whether a drop is allowed here (QAbstractItemModel).
+
+        Args:
+            mime: The drag payload.
+            action: The drop action (always a move).
+            row: Row under `parent` the drop lands before; -1 for "onto".
+            column: Unused.
+            parent: The group (or invalid: top level) the drop lands in.
+
+        Returns:
+            False for foreign payloads and for drops into a dragged item or its
+            subtree.
+        """
         moving = set(self._moving_ids(mime))
         if not moving:
             return False
@@ -256,7 +446,18 @@ class LayerOrderItemModel(QAbstractItemModel):
 
     def dropMimeData(self, mime: QMimeData, action: Qt.DropAction, row: int, column: int,
                      parent: QModelIndex) -> bool:
-        """Translate Qt's (row, parent) drop into an intent; never mutate."""
+        """Report a drop as an intent, and move nothing (QAbstractItemModel).
+
+        Args:
+            mime: The drag payload.
+            action: The drop action (always a move).
+            row: Row under `parent` the drop lands before; -1 for "onto".
+            column: Unused.
+            parent: The group (or invalid: top level) the drop lands in.
+
+        Returns:
+            False, so Qt never removes the source rows.
+        """
         if not self.canDropMimeData(mime, action, row, column, parent):
             return False
         moving = self._moving_ids(mime)
@@ -265,6 +466,20 @@ class LayerOrderItemModel(QAbstractItemModel):
         return False  # nothing was moved here: Qt must not remove source rows
 
     def _drop_target(self, moving: set, row: int, parent: QModelIndex) -> tuple[str, str]:
+        """Turn Qt's (row, parent) drop position into an anchor the Model understands.
+
+        Anchoring on the nearest sibling that is not being dragged makes the
+        target independent of rows that are about to move.
+
+        Args:
+            moving: Ids being dragged.
+            row: Row under `parent` the drop lands before; -1 for "onto".
+            parent: The group (or invalid: top level) the drop lands in.
+
+        Returns:
+            ``(target id, DROP_* position)``; ``("", DROP_END)`` for the empty
+            area below the list.
+        """
         group = self._item(parent)
         if row < 0:
             return (group.id, DROP_ON) if parent.isValid() else ("", DROP_END)

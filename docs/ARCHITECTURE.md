@@ -156,7 +156,11 @@ selected blocks move together and nothing ever leaves its group.
   is never freed — connect bound methods or signals.
 * `make test-data` — regenerates the manual-test project
   (`tests/data/make_test_project.py`).
-* `make lint` — ruff.
+* `make lint` — ruff, including type annotations (`ANN`) and docstrings
+  (`D`, Google style) for the plugin's code. Layout and documentation
+  conventions: [CODE_STYLE.md](CODE_STYLE.md); `tests/test_code_style.py`
+  checks that every function (private and nested ones included) is
+  documented with its arguments and return value.
 * `make bench` — time and memory against the number of layers
   (`tests/perf/`); results and complexity per operation in
   [PERFORMANCE.md](PERFORMANCE.md). `tests/test_scaling.py` guards the

@@ -1,15 +1,16 @@
 """Advanced Layer Order — Plugin: builds the pieces, wires them, owns the lifecycle.
 
-Architecture
+Architecture (details: docs/ARCHITECTURE.md)
 ------------
-    model.py            LayerOrderModel   — the document; single source of truth (no Qt)
-    view.py             LayerOrderView    — renders, emits intents (no logic)
-    tree_model.py       LayerOrderItemModel — Qt item model of the View; drops/checks → intents
-    tree_view.py        LayerOrderTree    — QTreeView; expand/collapse → intents
-    view_controller.py  ViewController    — intents → Model (+ undo), Model → View
+    model.py            LayerOrderModel      — the document; single source of truth (no Qt)
+    view.py             LayerOrderView       — renders, emits intents (no logic)
+    tree_model.py       LayerOrderItemModel  — Qt item model of the View; drops/checks → intents
+    tree_view.py        LayerOrderTree       — QTreeView; expand/collapse → intents
+    view_controller.py  ViewController       — intents → Model (+ undo), Model → View
     controller.py       LayerOrderController — QGIS ↔ Model
-    reconcile.py        reconcile_tree    — infer groups from a flat QGIS order (pure)
-    undo.py             TreeStateCommand  — document snapshot undo step
+    reconcile.py        reconcile_tree, plan_new_layers — sync algorithms (pure)
+    undo.py             TreeStateCommand     — document snapshot undo step
+    i18n.py, icons.py, logger.py, debug.py, compat.py — support
 
 Nothing but this module knows all the pieces. The only cross-wiring is the
 ViewController's requests for QGIS-owned state (visibility, control of the
@@ -36,13 +37,18 @@ from .view_controller import ViewController
 if TYPE_CHECKING:
     from qgis.gui import QgisInterface
 
-MENU = "Advanced Layer Order"
+MENU = "Advanced Layer Order"         # Plugins-menu entry and its action (brand: not translated)
 
 
 class AdvancedLayerOrderPlugin(QObject):
     """QGIS plugin entry point (see classFactory in __init__.py)."""
 
     def __init__(self, iface: QgisInterface) -> None:
+        """Keep QGIS's interface; nothing is built before ``initGui()``.
+
+        Args:
+            iface: QGIS's interface to the running application.
+        """
         super().__init__()
         self.iface = iface
         self.model = None
@@ -51,10 +57,15 @@ class AdvancedLayerOrderPlugin(QObject):
         self.controller = None
         self._toggle_action = None
 
-    # ==================================================================
-    # Lifecycle
-    # ==================================================================
+    # ------------------------------------------------------------------
+    # Lifecycle (called by QGIS)
+    # ------------------------------------------------------------------
     def initGui(self) -> None:
+        """Build the Model, View, ViewController and Controller and wire them.
+
+        The project is loaded on the next event-loop turn, once QGIS has
+        finished starting up.
+        """
         mw = self.iface.mainWindow()
         self.model = LayerOrderModel()
         self.view = LayerOrderView(mw)
@@ -85,6 +96,11 @@ class AdvancedLayerOrderPlugin(QObject):
         QTimer.singleShot(0, self.controller.load_project)
 
     def unload(self) -> None:
+        """Disconnect from QGIS, save the document and delete the panel.
+
+        Deleting the dock also deletes the ViewController and Controller
+        (their Qt parent); nothing of the plugin survives (check_no_leaks).
+        """
         if self.controller is not None:
             self.controller.teardown()
         if self._toggle_action is not None:
@@ -95,6 +111,14 @@ class AdvancedLayerOrderPlugin(QObject):
             self.view.deleteLater()   # also deletes the ViewController and Controller
         self.model = self.view = self.view_controller = self.controller = None
 
+    # ------------------------------------------------------------------
+    # Debug logging (infrastructure, not document state)
+    # ------------------------------------------------------------------
     def _set_verbose(self, on: bool) -> None:
+        """Switch DEBUG logging and show the new state in the panel.
+
+        Args:
+            on: True to log every step, False for INFO and above.
+        """
         set_verbose(on)
         self.view.render_verbose(on)
