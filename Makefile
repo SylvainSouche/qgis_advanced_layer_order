@@ -70,6 +70,11 @@ RUNTIME_FILES := $(sort $(wildcard $(PLUGIN_DIR)/*.py)) \
 STAGE := $(DIST_DIR)/stage
 
 zip: sync
+	@# A released version's zip is never rebuilt from changed code: bump VERSION first
+	@if git -C "$(PLUGIN_DIR)" rev-parse -q --verify "refs/tags/v$(VERSION)" >/dev/null \
+	    && ! git -C "$(PLUGIN_DIR)" diff --quiet "v$(VERSION)" -- $(RUNTIME_FILES) icons docs/DOCUMENTATION.md; then \
+	  echo "ERROR: $(VERSION) is released (tag v$(VERSION)) and the plugin files changed since: bump VERSION first"; \
+	  exit 1; fi
 	@rm -rf "$(STAGE)" "$(ZIP_PATH)"
 	@mkdir -p "$(STAGE)/$(PLUGIN_FOLDER)/icons" "$(STAGE)/$(PLUGIN_FOLDER)/docs"
 	@cp $(RUNTIME_FILES) "$(STAGE)/$(PLUGIN_FOLDER)/"
