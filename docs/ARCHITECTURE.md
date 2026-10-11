@@ -171,6 +171,12 @@ selected blocks move together and nothing ever leaves its group.
   ids are QGIS's. An unreadable document raises `DocumentError`; the
   Controller keeps it as `AdvancedLayerOrder/tree_json_unreadable` and
   starts from QGIS's order, so it is never silently overwritten.
+* **Only groups are persisted**: `tree_json` is written only while the tree
+  has a group; otherwise the Controller removes it (and the legacy
+  `BetterLayerOrder` entries), since QGIS saves the custom order itself.
+  A project without groups starts from QGIS's custom order. Applying a
+  *different* order to QGIS marks the project modified; re-applying the
+  same order (project open) does not.
 * **Ids are unique** across the tree; the Model's id index relies on it.
 * **Timing** (`controller.py`): `APPLY_DEBOUNCE_MS` (50) coalesces Model
   changes into one `setCustomLayerOrder`; `PLACE_DELAY_MS` (0) places new

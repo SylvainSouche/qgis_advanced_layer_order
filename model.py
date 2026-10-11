@@ -245,6 +245,10 @@ class LayerOrderModel:
         """1 for top-level, 2 for one level deep, ...; 0 if unknown."""
         return 1 + len(self._ancestors(item_id)) if self.find_item(item_id) else 0
 
+    def has_groups(self) -> bool:
+        """True if the tree has a group (any group has a top-level ancestor)."""
+        return any(isinstance(n, GroupNode) for n in self._root)
+
     def iter_layer_ids(self) -> Iterator[str]:
         return (n.id for n, _ in self.walk() if isinstance(n, LayerNode))
 

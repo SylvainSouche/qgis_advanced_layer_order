@@ -54,6 +54,10 @@ ENTRY_SCOPE = "AdvancedLayerOrder"
 LEGACY_SCOPE = "BetterLayerOrder"     # Layer Order Plus and early fork builds: read, never written
 ENTRY_TREE = "tree_json"
 ENTRY_TREE_UNREADABLE = "tree_json_unreadable"   # an unreadable tree_json, kept aside
+# Entries removed when the document holds nothing QGIS doesn't (no group);
+# never the unreadable copy. removeEmptyGroups: setting of 1.3.4 and before.
+_DOCUMENT_ENTRIES = ((ENTRY_SCOPE, ENTRY_TREE), (ENTRY_SCOPE, "removeEmptyGroups"),
+                     (LEGACY_SCOPE, ENTRY_TREE), (LEGACY_SCOPE, "removeEmptyGroups"))
 
 APPLY_DEBOUNCE_MS = 50   # coalesces a burst of Model changes into one setCustomLayerOrder
 PLACE_DELAY_MS = 0       # next event-loop turn: QGIS has put the new layers in its tree by then
@@ -234,11 +238,12 @@ class LayerOrderController(QObject):
             model.set_visibility(lid, node.isVisible() if node is not None else True)
 
     @staticmethod
-    def _qgis_draw_order() -> list:
+    def _qgis_draw_order() -> list[QgsMapLayer]:
+        """The order a project without groups starts from: QGIS's custom
+        order (kept and saved by QGIS even while control is off, so it is
+        the order ALO showed last), else the Layers-panel order."""
         root = QgsProject.instance().layerTreeRoot()
-        if root.hasCustomLayerOrder() and root.customLayerOrder():
-            return list(root.customLayerOrder())
-        return list(root.layerOrder())
+        return list(root.customLayerOrder() or root.layerOrder())
 
     @staticmethod
     def _layer_panel_order() -> list:
@@ -378,21 +383,30 @@ class LayerOrderController(QObject):
         self.external_edit.emit(before, self._model.serialize(), tr(LAYER_ORDER))
 
     def _apply_custom_order(self) -> None:
-        """Write the Model's flattened order to QGIS's custom layer order."""
+        """Write the Model's flattened order to QGIS's custom layer order.
+
+        A different order changes the project (QGIS saves it), so the
+        project is marked modified; re-applying the same order is not a
+        change (opening a project stays clean).
+        """
         self._apply_timer.stop()
         if self._applying or not self._model.get_control_enabled():
             return
         proj = QgsProject.instance()
         layers = [lyr for lyr in (proj.mapLayer(lid) for lid in self._model.get_flattened_layer_ids())
                   if lyr is not None]
+        root = proj.layerTreeRoot()
+        changed = (not root.hasCustomLayerOrder()
+                   or [lyr.id() for lyr in root.customLayerOrder()] != [lyr.id() for lyr in layers])
         self._applying = True
         try:
-            root = proj.layerTreeRoot()
             root.setHasCustomLayerOrder(True)
             root.setCustomLayerOrder(layers)
             log.debug("applied %d layer(s) to the custom order", len(layers))
         finally:
             self._applying = False
+        if changed:
+            proj.setDirty(True)
         self._iface.mapCanvas().refresh()
 
     # ==================================================================
@@ -415,9 +429,19 @@ class LayerOrderController(QObject):
                 and [lyr.id() for lyr in root.customLayerOrder()] == self._model.get_flattened_layer_ids())
 
     def _save_document(self) -> None:
-        """Store the document in the project (saved to disk with the project)."""
+        """Store the document in the project, only when it holds something
+        QGIS doesn't: groups. Without any, the order is QGIS's own custom
+        layer order (saved by QGIS), so the plugin's entries are removed and
+        a project ALO was never needed for carries no ALO data."""
         proj = QgsProject.instance()
-        raw = self._model.serialize()
-        if proj.readEntry(ENTRY_SCOPE, ENTRY_TREE, "")[0] != raw:
-            proj.writeEntry(ENTRY_SCOPE, ENTRY_TREE, raw)
+        if self._model.has_groups():
+            raw = self._model.serialize()
+            if proj.readEntry(ENTRY_SCOPE, ENTRY_TREE, "")[0] != raw:
+                proj.writeEntry(ENTRY_SCOPE, ENTRY_TREE, raw)
+                proj.setDirty(True)
+            return
+        present = [(scope, key) for scope, key in _DOCUMENT_ENTRIES if proj.readEntry(scope, key, "")[1]]
+        for scope, key in present:
+            proj.removeEntry(scope, key)
+        if present:
             proj.setDirty(True)

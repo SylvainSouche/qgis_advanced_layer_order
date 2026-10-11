@@ -820,3 +820,16 @@ def test_load_from_json_skips_duplicate_ids(model):
     model.load_from_json('{"children": [{"type": "layer", "id": "a"}, '
                          '{"type": "group", "id": "g", "children": [{"type": "layer", "id": "a"}]}]}')
     assert model.get_flattened_layer_ids() == ["a"]
+
+
+def test_has_groups(model):
+    assert not model.has_groups()
+    model.add_layer("a", "A")
+    assert not model.has_groups()
+    outer = model.create_group("Outer")
+    model.create_group("Inner", parent_id=outer)
+    assert model.has_groups()
+    model.delete_group(outer, unwrap_children=True)      # Inner moves to the top level
+    assert model.has_groups()
+    model.delete_group(model.get_root()[0].id if model.get_root()[0].id != "a" else model.get_root()[1].id)
+    assert not model.has_groups()

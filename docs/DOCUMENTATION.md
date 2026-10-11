@@ -124,6 +124,12 @@ Group structure itself (creating, nesting) is only edited in ALO.
 
 ## 6. Saved with the project
 
+ALO stores data in a project **only while it has groups**: that is the one
+thing QGIS doesn't keep itself. Without groups the order is QGIS's own
+custom layer order, saved by QGIS, so opening a project, toggling control
+or reordering layers leaves no ALO data behind, and deleting the last
+group removes it again.
+
 | Project entry | Content |
 |---|---|
 | `AdvancedLayerOrder / tree_json` | The groups and the order: `{"version": 1, "children": [...]}` with group nodes (`id`, `name`, `expanded`, `children`) and layer nodes (`id`, `name`) |
@@ -131,7 +137,7 @@ Group structure itself (creating, nesting) is only edited in ALO.
 
 Projects saved with *Layer Order Plus* or early builds of this plugin keep
 their groups: their `BetterLayerOrder` entries are read when no
-`AdvancedLayerOrder` entry exists.
+`AdvancedLayerOrder` entry exists (and removed with the last group).
 
 The custom order itself and "Control rendering order" are QGIS's own
 project settings. Visibility is never stored by ALO.
