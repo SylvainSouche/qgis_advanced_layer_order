@@ -27,6 +27,7 @@ from qgis.PyQt.QtWidgets import (
     QHBoxLayout,
     QInputDialog,
     QMenu,
+    QMessageBox,
     QPushButton,
     QVBoxLayout,
     QWidget,
@@ -37,6 +38,7 @@ from .i18n import (
     ADD_GROUP,
     CONTROL_RENDERING_ORDER,
     DRAG_TO_REORDER,
+    IMPORT_HIERARCHY,
     MOVE_DOWN,
     MOVE_TO_BOTTOM,
     MOVE_TO_TOP,
@@ -46,9 +48,11 @@ from .i18n import (
     RENAME_GROUP,
     UNDO,
     tr,
+    tr_plugin,
 )
 from .icons import (
     icon_add_group,
+    icon_import_hierarchy,
     icon_move_down,
     icon_move_up,
     icon_redo,
@@ -97,6 +101,7 @@ class LayerOrderView(QDockWidget):
     control_toggled = pyqtSignal(bool)                   # wished state of Control rendering order
     verbose_toggled = pyqtSignal(bool)                   # wished state of Verbose logging (debug mode)
     undo_requested = pyqtSignal(bool)                    # True = undo, False = redo (toolbar buttons)
+    import_hierarchy_requested = pyqtSignal()           # replace the tree with the Layers panel's
 
     def __init__(self, parent: QWidget | None = None) -> None:
         """Build the dock's widgets and connect them to the intent signals.
@@ -140,11 +145,14 @@ class LayerOrderView(QDockWidget):
             b.setIconSize(QSize(16, 16))
             return b
 
+        self.btn_import_hierarchy = tool_button(icon_import_hierarchy(), tr_plugin(IMPORT_HIERARCHY))
         self.btn_add_group = tool_button(icon_add_group(), tr(ADD_GROUP))
         self.btn_rename_group = tool_button(icon_rename_group(), tr(RENAME_GROUP))
         self.btn_del_group = tool_button(icon_remove_group(), tr(REMOVE_GROUP))
         self.btn_move_up = tool_button(icon_move_up(), f"{tr(MOVE_UP)} (Ctrl+↑)")
         self.btn_move_down = tool_button(icon_move_down(), f"{tr(MOVE_DOWN)} (Ctrl+↓)")
+        head.addWidget(self.btn_import_hierarchy)
+        head.addSpacing(8)
         for b in (self.btn_add_group, self.btn_rename_group, self.btn_del_group):
             head.addWidget(b)
         head.addSpacing(8)
@@ -184,6 +192,7 @@ class LayerOrderView(QDockWidget):
         captures ``self`` alive from C++, where the garbage collector can't see
         it, and the panel was never freed on unload (check_no_leaks.py).
         """
+        self.btn_import_hierarchy.clicked.connect(self._request_import_hierarchy)
         self.btn_add_group.clicked.connect(self._request_create_group)
         self.btn_rename_group.clicked.connect(self._request_rename)
         self.btn_del_group.clicked.connect(self._request_delete_groups)
@@ -277,7 +286,7 @@ class LayerOrderView(QDockWidget):
             enabled: QGIS's "Control rendering order" state.
         """
         self.chk_control.setChecked(bool(enabled))
-        for w in (self.tree, self.btn_add_group):
+        for w in (self.tree, self.btn_add_group, self.btn_import_hierarchy):
             w.setEnabled(enabled)
         self._update_group_buttons()
 
@@ -307,6 +316,10 @@ class LayerOrderView(QDockWidget):
     # ------------------------------------------------------------------
     # User input → intents
     # ------------------------------------------------------------------
+    def _request_import_hierarchy(self) -> None:
+        """Report Import layer hierarchy (toolbar button)."""
+        self.import_hierarchy_requested.emit()
+
     def _request_create_group(self) -> None:
         """Report Add Group with the current selection."""
         self.create_group_requested.emit(self.selected_ids())
@@ -456,6 +469,20 @@ class LayerOrderView(QDockWidget):
     # ------------------------------------------------------------------
     # Dialogs
     # ------------------------------------------------------------------
+    def confirm(self, title: str, text: str) -> bool:
+        """Ask the user to confirm an action (OK / Cancel).
+
+        Args:
+            title: Dialog title.
+            text: What the action will do.
+
+        Returns:
+            True if the user chose OK.
+        """
+        buttons = QMessageBox.StandardButton.Ok | QMessageBox.StandardButton.Cancel
+        answer = QMessageBox.question(self, title, text, buttons, QMessageBox.StandardButton.Cancel)
+        return answer == QMessageBox.StandardButton.Ok
+
     def ask_text(self, title: str, label: str, default: str) -> str | None:
         """Ask the user for a text (group name).
 

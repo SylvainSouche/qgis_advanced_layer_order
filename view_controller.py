@@ -29,6 +29,8 @@ from .compat import QUndoStack
 from .i18n import (
     ADD_GROUP,
     GROUP_NAME,
+    IMPORT_HIERARCHY,
+    IMPORT_HIERARCHY_CONFIRM,
     MOVE_DOWN,
     MOVE_ITEMS,
     MOVE_TO_BOTTOM,
@@ -38,6 +40,7 @@ from .i18n import (
     REMOVE_GROUP,
     RENAME_GROUP,
     tr,
+    tr_plugin,
 )
 from .model import (
     EVENT_CONTROL_CHANGED,
@@ -61,6 +64,33 @@ from .view import LayerOrderView
 log = logging.getLogger("AdvancedLayerOrder.view_controller")
 
 
+
+def _shape(nodes: list[Node]) -> list:
+    """Describe a tree without its group ids, to compare two trees.
+
+    Args:
+        nodes: Top-level nodes.
+
+    Returns:
+        Nested lists: a group is ``(name, children)``, a layer its id.
+    """
+    return [(n.name, _shape(n.children)) if isinstance(n, GroupNode) else n.id for n in nodes]
+
+
+def _layer_ids(nodes: list[Node]) -> list[str]:
+    """List the layers of a tree in draw order.
+
+    Args:
+        nodes: Top-level nodes.
+
+    Returns:
+        The layer ids, top first.
+    """
+    out: list[str] = []
+    for n in nodes:
+        out.extend(_layer_ids(n.children) if isinstance(n, GroupNode) else [n.id])
+    return out
+
 class ViewController(QObject):
     """Mediator between LayerOrderView and LayerOrderModel; owns the undo stack.
 
@@ -74,6 +104,7 @@ class ViewController(QObject):
 
     def __init__(self, model: LayerOrderModel, view: LayerOrderView,
                  layer_icon: Callable[[str], QIcon] | None = None,
+                 hierarchy: Callable[[], list[Node]] | None = None,
                  parent: QObject | None = None) -> None:
         """Connect to the View's intents and the Model's events, then render.
 
@@ -81,12 +112,16 @@ class ViewController(QObject):
             model: The document.
             view: The dock.
             layer_icon: Gives the icon of a layer id (QGIS's own; none in tests).
+            hierarchy: Reads the Layers panel's hierarchy as Model nodes
+                (``LayerOrderController.layers_panel_hierarchy``); without
+                it, importing does nothing.
             parent: Owning QObject (the dock, so both are deleted together).
         """
         super().__init__(parent)
         self._model = model
         self._view = view
         self._layer_icon = layer_icon or (lambda _lid: None)
+        self._hierarchy = hierarchy
         self.undo_stack = QUndoStack(self)
 
         model.add_listener(self._on_model_event)
@@ -99,6 +134,7 @@ class ViewController(QObject):
         v.expand_requested.connect(self._on_expand)
         v.check_requested.connect(self._on_check)
         v.drop_requested.connect(self._on_drop)
+        v.import_hierarchy_requested.connect(self._on_import_hierarchy)
         v.undo_requested.connect(self._on_undo_requested)   # a method, not a lambda: see LayerOrderView
         stack = self.undo_stack
         for sig in (stack.canUndoChanged, stack.canRedoChanged, stack.undoTextChanged, stack.redoTextChanged):
@@ -433,6 +469,67 @@ class ViewController(QObject):
         siblings = parent.children if parent is not None else self._model.get_root()
         idx = self._model.get_index_in_parent(item_id)
         return next((s.id for s in siblings[idx + 1:] if s.id not in exclude), None)
+
+    # ------------------------------------------------------------------
+    # Intents → import the Layers panel's hierarchy
+    # ------------------------------------------------------------------
+    def _on_import_hierarchy(self) -> None:
+        """Replace the tree with the Layers panel's groups, as one undo step.
+
+        The user is asked first when the import would lose something ALO
+        defined itself: groups, or an order other than the Layers panel's.
+        Nothing happens when the result would be identical. Redo restores
+        the hierarchy as it was imported, even if the Layers panel changed
+        since.
+        """
+        if self._hierarchy is None:
+            return
+        nodes = self._with_model_layers(self._hierarchy())
+        if _shape(nodes) == _shape(self._model.get_root()):
+            return
+        own = self._model.has_groups() or self._model.get_flattened_layer_ids() != _layer_ids(nodes)
+        if own and not self._view.confirm(tr_plugin(IMPORT_HIERARCHY), tr_plugin(IMPORT_HIERARCHY_CONFIRM)):
+            return
+        with self._user_edit(tr_plugin(IMPORT_HIERARCHY)):
+            self._model.replace_root(nodes)
+
+    def _with_model_layers(self, nodes: list[Node]) -> list[Node]:
+        """Make an imported tree hold exactly the Model's layers.
+
+        The Model mirrors QGIS's layers, so both sets normally match; layers
+        the Model doesn't know are dropped and missing ones are appended at
+        the top level, so the import can never add or lose a layer.
+
+        Args:
+            nodes: The imported top-level nodes.
+
+        Returns:
+            The nodes, filtered and completed.
+        """
+        known = set(self._model.iter_layer_ids())
+
+        def keep(level: list[Node]) -> list[Node]:
+            """Drop unknown layers from one level (groups are kept).
+
+            Args:
+                level: Nodes of one level.
+
+            Returns:
+                The level without unknown layers.
+            """
+            out: list[Node] = []
+            for n in level:
+                if isinstance(n, GroupNode):
+                    n.children = keep(n.children)
+                elif n.id not in known:
+                    continue
+                out.append(n)
+            return out
+
+        nodes = keep(nodes)
+        present = set(_layer_ids(nodes))
+        missing = [self._model.find_item(lid) for lid in self._model.iter_layer_ids() if lid not in present]
+        return nodes + [LayerNode(id=n.id, name=n.name, visible=n.visible) for n in missing]
 
     # ------------------------------------------------------------------
     # Intents → requests for QGIS-owned state

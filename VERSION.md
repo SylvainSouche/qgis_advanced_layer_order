@@ -4,6 +4,12 @@ Detailed history of Advanced Layer Order (previously the QGIS 4 fork of Layer Or
 versions; the current version number is in [`VERSION`](VERSION). Commit
 messages hold the full reasoning behind each fix.
 
+## 1.4 — Import the Layers panel's hierarchy
+
+*1.4.0*
+
+* **1.4.0** — New toolbar button **Import layer hierarchy** (tree icon, leftmost): Advanced Layer Order takes the Layers panel's groups (names, nesting, expanded state, empty groups included) and its layer order. One undo / redo step; redo restores the hierarchy as it was imported, even if the Layers panel changed since. When the import would replace an order or groups ALO defined itself, a confirmation asks first (OK / Cancel); nothing happens when the result would be identical. Its sentences carry their own translations (fr, de, es, it, pt, nl, English otherwise), using QGIS's terms in each language: a small built-in table for what QGIS's own catalog doesn't have.
+
 ## 1.3 — Move up / move down; review completed: strict MVC, Qt model/view tree, sync with QGIS's Layer Order panel, packaging for plugins.qgis.org
 
 *1.3.0 – 1.3.7*

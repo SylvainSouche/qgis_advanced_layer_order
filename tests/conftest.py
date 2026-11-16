@@ -47,16 +47,17 @@ def _install_qgis_stubs():
 
     # Qgis — minimal enum-like for severity levels
     class _Qgis:
-        Info = 0
-        Warning = 1
-        Critical = 2
-        Success = 3
+        class MessageLevel:
+            Info = 0
+            Warning = 1
+            Critical = 2
+            Success = 3
     qgis_core.Qgis = _Qgis
 
     # QgsMessageLog — capture log messages for assertions
     class _QgsMessageLog:
         @staticmethod
-        def logMessage(msg, tag, level=_Qgis.Info):
+        def logMessage(msg, tag, level=_Qgis.MessageLevel.Info):
             # No-op in tests; could capture if needed
             pass
     qgis_core.QgsMessageLog = _QgsMessageLog

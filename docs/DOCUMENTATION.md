@@ -48,6 +48,7 @@ Layer Order panel; they always agree.
 
 | Action | Effect |
 |---|---|
+| **Import layer hierarchy** | Toolbar, leftmost (tree icon). Replaces the panel's tree with the **Layers panel's** groups (names, nesting, expanded state, empty groups too) and its layer order. If this would replace an order or groups you made in Advanced Layer Order, you are asked first (OK / Cancel). One undo step: Undo brings your tree back, Redo the imported hierarchy as it was imported, even if the Layers panel changed since. |
 | **Add Group** | New group with a unique name, wrapping the selected items (it takes their place). Exception: with a single group selected, an empty subgroup is created at its top. Nothing selected: an empty group at the bottom. |
 | **Rename Group** | Exactly one group selected. |
 | **Remove Group** | One or more groups selected; their contents take their place. |

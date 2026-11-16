@@ -223,3 +223,21 @@ Reopen the baseline. The rows are cumulative.
 |---|---|---|
 | 10.1 | ⌘↑ / ⌘↓ on a selected layer in ALO | moves it, as in section 4 |
 | 10.2 | ⌘Z with the focus in ALO | nothing happens to the layer order (as 8.5) |
+
+## 11. Import layer hierarchy
+
+Start from `tests/data/test.qgz`, control **on** (tick it in ALO).
+
+| # | Action | ALO | Native | Map |
+|---|---|---|---|---|
+| 11.1 | In the **Layers** panel, select A and B → right-click → **Group Selected**, rename the group "Roads"; same with C, D → "Water"; collapse Water | unchanged: `A, B, C, D, E` | `A B C D E` | centre red |
+| 11.2 | ALO: click **Import layer hierarchy** (leftmost button) | **no** popup (ALO had nothing of its own); `Roads[A, B], Water[C, D], E`, Water collapsed; ↶ tooltip "Undo: Import layer hierarchy" | `A B C D E` | centre red |
+| 11.3 | Click it again | nothing happens: no popup, no new undo step | — | — |
+| 11.4 | ALO: drag E above the **Roads group** (top level), then **Import layer hierarchy** | a popup: "This will replace Advanced Layer Order's layer order and groups with those of the Layers panel. It can be undone." with **OK / Cancel** | `E A B C D` before | centre blue before |
+| 11.5 | **Cancel** | unchanged: `E, Roads[A, B], Water[C, D]`; no new undo step | `E A B C D` | centre blue |
+| 11.6 | **Import layer hierarchy** again → **OK** | `Roads[A, B], Water[C, D], E` | `A B C D E` | centre red |
+| 11.7 | ALO: Add Group "Mine" around E (same order) → **Import layer hierarchy** | the popup appears (ALO groups would be replaced); OK → `Roads[A, B], Water[C, D], E` | `A B C D E` | centre red |
+| 11.8 | Layers panel: rename Roads to "Highways" and add a group "Later" (don't move layers). ALO: **↶ Undo**, then **↷ Redo** | after Undo: `Roads[A, B], Water[C, D], Mine[E]`; after Redo: `Roads[A, B], Water[C, D], E` — the hierarchy **as imported**, not "Highways"/"Later" | `A B C D E` | centre red |
+| 11.9 | Untick control | the Import layer hierarchy button is greyed out with the rest | — | — |
+| 11.10 | QGIS in French (as 8.9): hover the button; repeat 11.4 | tooltip "Importer la hiérarchie des couches"; popup in French, OK / Cancel translated | — | — |
+

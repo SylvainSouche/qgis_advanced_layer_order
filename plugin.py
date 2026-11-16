@@ -69,9 +69,10 @@ class AdvancedLayerOrderPlugin(QObject):
         mw = self.iface.mainWindow()
         self.model = LayerOrderModel()
         self.view = LayerOrderView(mw)
-        self.view_controller = ViewController(self.model, self.view,
-                                              layer_icon=icon_for_layer_id, parent=self.view)
         self.controller = LayerOrderController(self.model, self.iface, parent=self.view)
+        self.view_controller = ViewController(self.model, self.view, layer_icon=icon_for_layer_id,
+                                              hierarchy=self.controller.layers_panel_hierarchy,
+                                              parent=self.view)
 
         # ViewController requests for QGIS-owned state → Controller
         vc, ctl = self.view_controller, self.controller

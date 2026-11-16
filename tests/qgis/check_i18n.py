@@ -1,6 +1,7 @@
 """The labels borrowed from QGIS's catalog (i18n.py) exist in this QGIS and
-are translated; the panel shows them in the user's language; the verbose
-logging box only appears with QGIS_DEBUG."""
+are translated; the plugin's own sentences follow QGIS's interface language;
+the panel shows both in the user's language; the verbose logging box only
+appears with QGIS_DEBUG."""
 import os
 
 import qgis.core
@@ -34,6 +35,12 @@ for lang in ("fr", "de", "es"):
     QCoreApplication.removeTranslator(translator)
     check(not missing, f"not in QGIS's {lang} catalog (renamed upstream?): {missing}")
 
+# The plugin's own sentences follow QGIS's interface language
+lang = i18n.ui_language()
+check(isinstance(lang, str) and len(lang) == 2 and lang.isalpha(), f"QGIS interface language read: {lang!r}")
+real_language = i18n.ui_language
+i18n.ui_language = lambda: "fr"
+
 french = QTranslator()
 french.load(catalog("fr"))
 QCoreApplication.installTranslator(french)
@@ -41,11 +48,15 @@ os.environ.pop("QGIS_DEBUG", None)
 view = LayerOrderView()
 view.show()
 pump(0)
-shown = (view.btn_add_group.toolTip(), view.chk_control.text(), view.btn_undo.toolTip())
-check(shown == ("Ajouter un groupe", "Contrôler l'ordre de rendu", "Annuler"), f"French panel: {shown}")
+shown = (view.btn_add_group.toolTip(), view.chk_control.text(), view.btn_undo.toolTip(),
+         view.btn_import_hierarchy.toolTip())
+french_panel = ("Ajouter un groupe", "Contrôler l'ordre de rendu", "Annuler",
+                "Importer la hiérarchie des couches")
+check(shown == french_panel, f"French panel: {shown}")
 check(not view.chk_verbose.isVisibleTo(view), "verbose logging box hidden without QGIS_DEBUG")
 view.close()
 QCoreApplication.removeTranslator(french)
+i18n.ui_language = real_language
 
 os.environ["QGIS_DEBUG"] = "1"
 debug_view = LayerOrderView()

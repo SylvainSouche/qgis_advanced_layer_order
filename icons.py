@@ -99,6 +99,15 @@ def icon_redo() -> QIcon:
     return bundled_icon("redo.svg")
 
 
+def icon_import_hierarchy() -> QIcon:
+    """Give the Import layer hierarchy toolbar icon (a tree structure).
+
+    Returns:
+        The icon.
+    """
+    return bundled_icon("import_hierarchy.svg")
+
+
 def icon_for_layer(layer: QgsMapLayer | None) -> QIcon:
     """Give QGIS's own icon for a layer's type and geometry.
 

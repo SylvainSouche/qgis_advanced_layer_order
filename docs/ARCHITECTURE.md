@@ -193,13 +193,18 @@ selected blocks move together and nothing ever leaves its group.
 
 ## Translations
 
-No translation files are shipped. `i18n.py` lists the panel's labels as
-QGIS catalog entries (context + English text, e.g.
-`("QgsLayerTreeViewDefaultActions", "Move to &Top")`); `tr()` looks them
-up with `QCoreApplication.translate`, so the translator QGIS installs at
-startup shows them in the user's language. Labels QGIS has no entry for
-stay in English. `tests/qgis/check_i18n.py` fails if a future QGIS
-renames one of the borrowed entries.
+No .qm / .ts files are shipped. `i18n.py` holds two kinds of labels:
+
+* **Borrowed from QGIS** (`tr`): QGIS catalog entries (context + English
+  text, e.g. `("QgsLayerTreeViewDefaultActions", "Move to &Top")`), looked
+  up with `QCoreApplication.translate`, so the translator QGIS installs at
+  startup shows them in the user's language. `tests/qgis/check_i18n.py`
+  fails if a future QGIS renames one.
+* **The plugin's own** (`tr_plugin`): the few sentences QGIS has no
+  equivalent for (Import layer hierarchy and its confirmation), with their
+  translations in a small table (fr, de, es, it, pt, nl; English
+  otherwise), written with QGIS's own terms in each language. The language
+  is QGIS's interface language (`QgsApplication.locale()`).
 
 ## QGIS 3 and QGIS 4
 

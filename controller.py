@@ -40,7 +40,11 @@ from .model import (
     EVENT_MODEL_LOADED,
     EVENT_ORDER_CHANGED,
     DocumentError,
+    GroupNode,
+    LayerNode,
     LayerOrderModel,
+    Node,
+    new_group_id,
 )
 from .reconcile import plan_new_layers, reconcile_tree
 
@@ -187,6 +191,39 @@ class LayerOrderController(QObject):
                 node.setItemVisibilityCheckedParentRecursive(True)
             else:
                 node.setItemVisibilityChecked(False)
+
+    def layers_panel_hierarchy(self) -> list[Node]:
+        """Read the Layers panel's groups and layers as a tree for the Model.
+
+        Groups keep their names, nesting and expanded state (new ALO group
+        ids); layers keep the Layers-panel order and their effective
+        visibility. Only what the Layers panel shows: the ViewController
+        makes the result hold exactly the Model's layers.
+
+        Returns:
+            Top-level nodes, top first.
+        """
+        proj = QgsProject.instance()
+
+        def convert(tree_node: QgsLayerTreeNode) -> Node | None:
+            """Convert one Layers-panel node, and the nodes below it.
+
+            Args:
+                tree_node: A group or layer node of QGIS's layer tree.
+
+            Returns:
+                The Model node, or None for a layer the project no longer has.
+            """
+            if QgsLayerTree.isGroup(tree_node):
+                children = [c for c in map(convert, tree_node.children()) if c is not None]
+                return GroupNode(id=new_group_id(), name=tree_node.name(),
+                                 expanded=tree_node.isExpanded(), children=children)
+            layer = proj.mapLayer(tree_node.layerId()) if QgsLayerTree.isLayer(tree_node) else None
+            if layer is None:
+                return None
+            return LayerNode(id=layer.id(), name=layer.name(), visible=tree_node.isVisible())
+
+        return [n for n in map(convert, proj.layerTreeRoot().children()) if n is not None]
 
     def set_control_enabled(self, enabled: bool) -> None:
         """Let ALO drive (or stop driving) the rendering order.
