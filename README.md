@@ -17,6 +17,9 @@ list draws on top of the map.
 * Order groups, nested, created from a selection or by dropping one layer
   onto another; rename, delete, expand/collapse.
 * Drag and drop of any selection, keeping its on-screen order.
+* Import layer hierarchy: take the Layers panel's groups and layer order
+  in one undoable step (asks first if your own order or groups would be
+  replaced).
 * Two-way sync with QGIS: Layers-panel visibility, layers added / removed /
   renamed, the "Control rendering order" switch, and moves made in QGIS's
   own Layer Order panel (groups are kept consistent).
@@ -69,8 +72,10 @@ maintained by **Sylvain Souche** with his agreement.
   QGIS's Layer Order panel.
 * **1.3.x** — move up / down, packaging for plugins.qgis.org, manual test
   plan with verifiable data; published as *Advanced Layer Order*; runs on
-  QGIS 3.40 / 3.44 again as well as QGIS 4. Details
-  in [`VERSION.md`](VERSION.md).
+  QGIS 3.40 / 3.44 again as well as QGIS 4.
+* **1.4.x** — import the Layers panel's group hierarchy into the panel
+  (one undo / redo step, confirmation before replacing your own order or
+  groups). Details in [`VERSION.md`](VERSION.md).
 
 Repository: https://github.com/SylvainSouche/qgis_advanced_layer_order ·
 MIT — see [`LICENSE`](LICENSE).
